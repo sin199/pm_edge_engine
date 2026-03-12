@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-03-12
+
+- Broadened market parsing for common 1X2 labels such as `Home/Draw/Away` and `1/X/2`.
+- Added under-totals and away-side spread handling for common binary market phrasing.
+- Added parsing tests for generic labels, away-team win phrasing, unsupported double-chance input, under totals, and away spread coverage.
+- Documented known unsupported market shapes in the README.
+
 ## [0.1.3] - 2026-03-12
 
 - Added deterministic JSON odds fixtures for fresh and stale provider coverage.

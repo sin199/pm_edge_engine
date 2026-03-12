@@ -87,7 +87,7 @@ async fn main() -> Result<()> {
     let cfg = AppConfig::load()?;
     let storage = Storage::new(&cfg.database.path).await?;
     let http = Client::builder()
-        .user_agent("pm_edge_engine/0.1.3")
+        .user_agent("pm_edge_engine/0.1.4")
         .build()
         .context("build reqwest client")?;
 

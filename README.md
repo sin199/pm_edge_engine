@@ -206,6 +206,13 @@ Runtime env overrides:
 - Unsupported fallback competition codes remain explicit skips, not silent substitutions.
 - If `FOOTBALL_DATA_TOKEN` is missing and public fallback is disabled, `fetch` skips football ingestion without crashing.
 
+Known unsupported market shapes:
+
+- double-chance or "win or draw" markets
+- draw-no-bet / DNB phrasing
+- Asian handicap or integer-line spread markets with push semantics
+- player props, card props, and other non-match-result markets
+
 ## Development
 
 Run the local validation loop:
@@ -229,7 +236,6 @@ Dependabot tracks Cargo and GitHub Actions updates weekly, and CodeQL runs on pu
 
 Open roadmap issues:
 
-- [#2 Add deterministic odds-provider fixtures](https://github.com/sin199/pm_edge_engine/issues/2)
 - [#4 Broaden market mapping coverage](https://github.com/sin199/pm_edge_engine/issues/4)
 
 Current milestone:
@@ -238,7 +244,6 @@ Current milestone:
 
 Good ways to contribute right now:
 
-- [#4 Broaden market mapping coverage](https://github.com/sin199/pm_edge_engine/issues/4)
 - [#5 Looking for sample markets and mapping misses](https://github.com/sin199/pm_edge_engine/issues/5)
 - [Q&A discussion](https://github.com/sin199/pm_edge_engine/discussions/7)
 

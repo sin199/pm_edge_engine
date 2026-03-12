@@ -111,8 +111,10 @@ pub enum MarketType {
     OneXTwoDraw,
     OneXTwoAway,
     TotalsOver { line: f64 },
+    TotalsUnder { line: f64 },
     BttsYes,
     SpreadHomeCover { line: f64 },
+    SpreadAwayCover { line: f64 },
     BinaryTeamYes { team_name: String },
     BinaryGenericYes,
     Unknown,
@@ -124,9 +126,9 @@ impl MarketType {
             Self::OneXTwoHome => "oneXtwo_home",
             Self::OneXTwoDraw => "oneXtwo_draw",
             Self::OneXTwoAway => "oneXtwo_away",
-            Self::TotalsOver { .. } => "totals_over",
+            Self::TotalsOver { .. } | Self::TotalsUnder { .. } => "totals_over",
             Self::BttsYes => "btts_yes",
-            Self::SpreadHomeCover { .. } => "spread_cover",
+            Self::SpreadHomeCover { .. } | Self::SpreadAwayCover { .. } => "spread_cover",
             Self::BinaryTeamYes { .. } | Self::BinaryGenericYes | Self::Unknown => "binary_yes",
         }
     }
