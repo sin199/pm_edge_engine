@@ -1,0 +1,67 @@
+[database]
+path = "pm_edge_engine.db"
+
+[gamma]
+base_url = "https://gamma-api.polymarket.com"
+page_limit = 200
+max_pages = 6
+only_active = true
+sports_only = true
+request_timeout_secs = 20
+retries = 4
+
+[football]
+base_url = "https://api.football-data.org/v4"
+token_env = "FOOTBALL_DATA_TOKEN"
+competitions = ["PL", "PD", "SA", "BL1", "FL1", "CL"]
+history_seasons = 3
+lookback_days = 30
+forward_days = 14
+request_timeout_secs = 25
+retries = 5
+
+[model]
+elo_k = 18.0
+home_adv_elo = 55.0
+half_life_days = 180.0
+draw_sigmoid_a = -0.35
+draw_sigmoid_b = 0.004
+poisson_goal_cap = 10
+poisson_iters = 260
+poisson_lr = 0.02
+poisson_l2 = 0.0015
+poisson_min_matches = 800
+poisson_medium_matches = 2000
+hybrid_poisson_weight = 0.55
+hybrid_elo_weight = 0.45
+min_match_confidence = 0.80
+
+[engine]
+cost_buffer = 0.006
+base_min_edge = 0.02
+min_confidence = 0.55
+min_liquidity_usd = 3000.0
+max_spread = 0.02
+min_volume_5m = 600.0
+min_time_to_event_minutes = 10
+fractional_kelly = 0.20
+max_single_trade_equity_pct = 0.0075
+max_match_equity_pct = 0.02
+max_daily_loss_pct = 0.03
+
+[runtime]
+refresh_markets_minutes = 15
+refresh_football_minutes = 60
+predict_after_refresh = true
+fair_probs_out_path = "fair_probs.json"
+orders_out_path = "orders.json"
+
+[odds]
+enabled = false
+provider = "mock"
+json_file = ""
+
+[calibration]
+enabled = true
+method = "isotonic"
+retrain_hours = 24
