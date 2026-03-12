@@ -221,7 +221,8 @@ Current milestone:
 
 Good ways to contribute right now:
 
-- [#3 Expand public examples and schema notes](https://github.com/sin199/pm_edge_engine/issues/3) (`good first issue`)
+- [#8 Annotate the extended example with interpretation notes](https://github.com/sin199/pm_edge_engine/issues/8) (`good first issue`)
+- [#9 Document schema/versioning expectations for JSON consumers](https://github.com/sin199/pm_edge_engine/issues/9) (`good first issue`)
 - [#5 Looking for sample markets and mapping misses](https://github.com/sin199/pm_edge_engine/issues/5)
 - [Q&A discussion](https://github.com/sin199/pm_edge_engine/discussions/7)
 
