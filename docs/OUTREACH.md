@@ -33,16 +33,3 @@ What would help most now is concrete feedback from real users:
 Repo: https://github.com/sin199/pm_edge_engine
 Feedback issue: https://github.com/sin199/pm_edge_engine/issues/5
 Discussion: https://github.com/sin199/pm_edge_engine/discussions/6
-
-## HN / forum-style intro
-
-I open-sourced a deterministic Rust Polymarket sports edge engine that tries to stay transparent about mapping, calibration, and risk gating instead of copying market prices or hiding the logic behind an opaque service.
-
-It is still early, but it already has:
-- CLI workflow for fetch / train / predict / candidates / run
-- independent ELO, Poisson, hybrid, calibration, and order-generation components
-- CI, tests, examples, demo notes, and public roadmap issues
-
-I would especially value concrete failure cases: real market wording that maps badly, setup friction, or output-contract gaps.
-
-Repo: https://github.com/sin199/pm_edge_engine
