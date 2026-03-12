@@ -1,0 +1,20 @@
+{
+  "results": [
+    {
+      "market_slug": "demo-teama-teamb-2026-02-18-home-win",
+      "fair_probs": [0.58, 0.42]
+    },
+    {
+      "market_slug": "demo-teama-teamb-2026-02-18-over-2-5",
+      "fair_probs": [0.54, 0.46]
+    },
+    {
+      "market_slug": "demo-teama-teamb-2026-02-18-btts",
+      "fair_probs": [0.56, 0.44]
+    },
+    {
+      "market_slug": "demo-teama-teamb-2026-02-18-spread-home",
+      "fair_probs": [0.51, 0.49]
+    }
+  ]
+}

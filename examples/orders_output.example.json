@@ -1,0 +1,12 @@
+{
+  "orders": [
+    {
+      "market_slug": "demo-teama-teamb-2026-02-18-home-win",
+      "side": "BUY",
+      "outcome_index": 0,
+      "limit_price": 0.41,
+      "size_usd": 5.0,
+      "order_type": "maker"
+    }
+  ]
+}

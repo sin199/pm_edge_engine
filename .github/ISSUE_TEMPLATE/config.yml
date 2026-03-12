@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Contribution guide
+    url: https://github.com/sin199/pm_edge_engine/blob/main/CONTRIBUTING.md
+    about: Read local setup, validation, and pull request expectations before contributing.
+  - name: Examples and sample payloads
+    url: https://github.com/sin199/pm_edge_engine/blob/main/examples/README.md
+    about: Check the example inputs and outputs before opening a support-style issue.

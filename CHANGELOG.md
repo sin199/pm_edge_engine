@@ -4,7 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- No unreleased changes yet.
+- Added structured GitHub issue templates for bugs and feature requests.
+- Added expanded example inputs, outputs, and usage notes under `examples/`.
+- Linked examples and support guidance from the main README.
 
 ## [0.1.0] - 2026-03-12
 

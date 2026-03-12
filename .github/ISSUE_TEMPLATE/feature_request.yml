@@ -1,0 +1,55 @@
+name: Feature request
+description: Propose an improvement to modeling, execution logic, integrations, or developer experience
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for scoped, concrete requests. Explain the problem first, then the change.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What limitation are you running into?
+      placeholder: The current behavior makes it hard to...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the feature or design you want
+      placeholder: I would like the project to support...
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Expected impact
+      description: Why is this valuable for maintainers or users?
+      placeholder: This would improve...
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe workarounds or competing approaches you evaluated
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - CLI / developer experience
+        - Data ingestion
+        - Market mapping
+        - Probability modeling
+        - Calibration
+        - Order generation
+        - Documentation / examples
+        - Integrations
+        - Other
+    validations:
+      required: true

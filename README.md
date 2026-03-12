@@ -160,6 +160,14 @@ or:
 {"orders":[{"market_slug":"...","side":"BUY","outcome_index":0,"limit_price":0.42,"size_usd":5.0,"order_type":"maker"}]}
 ```
 
+## Examples
+
+See [examples/README.md](./examples/README.md) for:
+
+- minimal and extended market input payloads
+- example fair-probability and order outputs
+- copy-paste commands for local prediction and candidate generation
+
 ## Config
 
 See `config.toml.example`.
@@ -201,6 +209,10 @@ CI runs the same checks on pushes to `main` and on pull requests.
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+## Support
+
+Use the GitHub issue templates for bugs and feature requests. Include repro steps, example payloads, and the commit or release you tested against.
 
 ## Changelog
 

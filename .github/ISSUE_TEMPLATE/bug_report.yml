@@ -1,0 +1,77 @@
+name: Bug report
+description: Report a reproducible bug in data ingestion, mapping, modeling, or order generation
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please provide enough detail to reproduce the issue locally.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the project is affected?
+      options:
+        - CLI / command execution
+        - Data ingestion
+        - Market mapping
+        - Probability modeling
+        - Calibration
+        - Order generation
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Short description of the bug
+      placeholder: What broke?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Include commands, config snippets, and input files where possible
+      placeholder: |
+        1. Run `cargo run -- ...`
+        2. Use this input payload
+        3. Observe this output
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: What should have happened?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      placeholder: What happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: artifacts
+    attributes:
+      label: Logs or sample data
+      description: Paste relevant logs, JSON snippets, or stack traces
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Git commit SHA, release tag, or branch
+      placeholder: e.g. v0.1.0 or 1334002
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS and Rust version
+      placeholder: e.g. macOS 15 / rustc 1.89.0
