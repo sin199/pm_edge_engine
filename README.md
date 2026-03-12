@@ -219,6 +219,11 @@ Open roadmap issues:
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
+Project policies:
+
+- [Code of Conduct](./CODE_OF_CONDUCT.md)
+- [Security Policy](./SECURITY.md)
+
 ## Support
 
 Use the GitHub issue templates for bugs and feature requests. Include repro steps, example payloads, and the commit or release you tested against.
