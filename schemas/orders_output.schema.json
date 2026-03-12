@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sin199/pm_edge_engine/blob/main/schemas/orders_output.schema.json",
+  "title": "OrdersOutput",
+  "description": "Output shape for pm_edge_engine candidates.",
+  "type": "object",
+  "required": ["orders"],
+  "properties": {
+    "orders": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "market_slug",
+          "side",
+          "outcome_index",
+          "limit_price",
+          "size_usd",
+          "order_type"
+        ],
+        "properties": {
+          "market_slug": {
+            "type": "string"
+          },
+          "side": {
+            "type": "string"
+          },
+          "outcome_index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit_price": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "size_usd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "order_type": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

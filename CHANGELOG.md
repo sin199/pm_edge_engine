@@ -4,13 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- Added structured GitHub issue templates for bugs and feature requests.
-- Added expanded example inputs, outputs, and usage notes under `examples/`.
-- Linked examples and support guidance from the main README.
-- Added a demo note with captured CLI outputs from a real-team sample payload.
-- Created public roadmap issues to make upcoming work visible and reviewable.
-- Enabled GitHub Discussions and added public feedback / Q&A threads.
-- Added reusable outreach copy for external launch posts.
+## [0.1.1] - 2026-03-12
+
+- Added explicit JSON contract documentation for input, `predict`, and `candidates` payloads.
+- Added machine-readable JSON schemas under `schemas/` for downstream tooling.
+- Added human-readable interpretation notes for the extended example payload.
+- Added CodeQL and Dependabot so maintenance signals continue beyond manual pushes.
+- Refreshed README contribution entry points and release/status badges.
 
 ## [0.1.0] - 2026-03-12
 

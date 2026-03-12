@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/sin199/pm_edge_engine/blob/main/schemas/markets_input.schema.json",
+  "title": "MarketsInput",
+  "description": "Accepted root shape for pm_edge_engine predict/candidates market payloads.",
+  "oneOf": [
+    {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/marketRecord"
+      }
+    },
+    {
+      "type": "object",
+      "required": ["markets"],
+      "properties": {
+        "markets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/marketRecord"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "marketRecord": {
+      "type": "object",
+      "required": [
+        "market_slug",
+        "question",
+        "outcomes",
+        "prices",
+        "liquidity",
+        "volume",
+        "active",
+        "closed",
+        "accepting_orders"
+      ],
+      "properties": {
+        "market_slug": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        },
+        "outcomes": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "string"
+          }
+        },
+        "prices": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "best_bid": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "best_ask": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "spread": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
+        "liquidity": {
+          "type": "number",
+          "minimum": 0
+        },
+        "volume": {
+          "type": "number",
+          "minimum": 0
+        },
+        "volume_5m": {
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "start_time_utc": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "event_title": {
+          "type": ["string", "null"]
+        },
+        "event_slug": {
+          "type": ["string", "null"]
+        },
+        "event_home_team": {
+          "type": ["string", "null"]
+        },
+        "event_away_team": {
+          "type": ["string", "null"]
+        },
+        "league_hint": {
+          "type": ["string", "null"]
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "closed": {
+          "type": "boolean"
+        },
+        "accepting_orders": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

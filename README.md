@@ -1,6 +1,8 @@
 # pm_edge_engine
 
 [![CI](https://github.com/sin199/pm_edge_engine/actions/workflows/ci.yml/badge.svg)](https://github.com/sin199/pm_edge_engine/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/sin199/pm_edge_engine/actions/workflows/codeql.yml/badge.svg)](https://github.com/sin199/pm_edge_engine/actions/workflows/codeql.yml)
+[![Release](https://img.shields.io/github/v/release/sin199/pm_edge_engine)](https://github.com/sin199/pm_edge_engine/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
 Deterministic Rust (tokio) Polymarket sports edge engine with independent probability models.
@@ -160,13 +162,21 @@ or:
 {"orders":[{"market_slug":"...","side":"BUY","outcome_index":0,"limit_price":0.42,"size_usd":5.0,"order_type":"maker"}]}
 ```
 
+Schema and compatibility notes:
+
+- See [docs/JSON_CONTRACT.md](./docs/JSON_CONTRACT.md) for schema/versioning expectations.
+- Machine-readable reference schemas live under [`schemas/`](./schemas/).
+- Consumers should join on `market_slug` and treat example numeric values as illustrative, not frozen snapshots.
+
 ## Examples
 
 See [examples/README.md](./examples/README.md) for:
 
 - minimal and extended market input payloads
+- annotated notes for the extended example
 - example fair-probability and order outputs
 - copy-paste commands for local prediction and candidate generation
+- JSON schema references for downstream tooling
 
 See [docs/DEMO.md](./docs/DEMO.md) for a short walkthrough with captured CLI outputs from a real-team sample payload.
 
@@ -200,6 +210,7 @@ cargo test --all-targets
 ```
 
 CI runs the same checks on pushes to `main` and on pull requests.
+Dependabot tracks Cargo and GitHub Actions updates weekly, and CodeQL runs on pushes, pull requests, and a scheduled scan.
 
 ## Roadmap
 
@@ -221,8 +232,8 @@ Current milestone:
 
 Good ways to contribute right now:
 
-- [#8 Annotate the extended example with interpretation notes](https://github.com/sin199/pm_edge_engine/issues/8) (`good first issue`)
-- [#9 Document schema/versioning expectations for JSON consumers](https://github.com/sin199/pm_edge_engine/issues/9) (`good first issue`)
+- [#10 Add command-level fixture test harness for example payloads](https://github.com/sin199/pm_edge_engine/issues/10)
+- [#11 Add fixture input that should deterministically WAIT](https://github.com/sin199/pm_edge_engine/issues/11)
 - [#5 Looking for sample markets and mapping misses](https://github.com/sin199/pm_edge_engine/issues/5)
 - [Q&A discussion](https://github.com/sin199/pm_edge_engine/discussions/7)
 
@@ -246,6 +257,7 @@ Discussion entry points:
 - [Feedback issue for sample markets and mapping misses](https://github.com/sin199/pm_edge_engine/issues/5)
 
 If you want to share the project externally, see [docs/OUTREACH.md](./docs/OUTREACH.md) for ready-to-post copy.
+If you need to integrate the CLI into another tool, start with [docs/JSON_CONTRACT.md](./docs/JSON_CONTRACT.md).
 
 ## Changelog
 
