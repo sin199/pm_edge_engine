@@ -144,3 +144,7 @@ Runtime env overrides:
 - No API keys are hardcoded.
 - Model output is deterministic for the same input state.
 - If football-data token is missing, `fetch` skips football ingestion without crashing.
+
+## License
+
+MIT
