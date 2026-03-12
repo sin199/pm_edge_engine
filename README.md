@@ -168,6 +168,8 @@ See [examples/README.md](./examples/README.md) for:
 - example fair-probability and order outputs
 - copy-paste commands for local prediction and candidate generation
 
+See [docs/DEMO.md](./docs/DEMO.md) for a short walkthrough with captured CLI outputs from a real-team sample payload.
+
 ## Config
 
 See `config.toml.example`.
@@ -205,6 +207,13 @@ CI runs the same checks on pushes to `main` and on pull requests.
 - Add more examples for input preparation and output interpretation.
 - Add release notes and tagged versions as the CLI and JSON contracts stabilize.
 - Broaden odds-provider integrations while keeping deterministic fallbacks.
+
+Open roadmap issues:
+
+- [#1 Expand fixture-based end-to-end tests](https://github.com/sin199/pm_edge_engine/issues/1)
+- [#2 Add deterministic odds-provider fixtures](https://github.com/sin199/pm_edge_engine/issues/2)
+- [#3 Expand public examples and schema notes](https://github.com/sin199/pm_edge_engine/issues/3)
+- [#4 Broaden market mapping coverage](https://github.com/sin199/pm_edge_engine/issues/4)
 
 ## Contributing
 

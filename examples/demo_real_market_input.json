@@ -1,0 +1,25 @@
+{
+  "markets": [
+    {
+      "market_slug": "demo-arsenal-manutd-2026-01-25-arsenal",
+      "question": "Will Arsenal FC win vs Manchester United FC?",
+      "outcomes": ["Yes", "No"],
+      "prices": [0.46, 0.54],
+      "best_bid": 0.45,
+      "best_ask": 0.47,
+      "spread": 0.02,
+      "liquidity": 9000,
+      "volume": 18000,
+      "volume_5m": 1200,
+      "start_time_utc": "2026-01-25T16:30:00Z",
+      "event_title": "Arsenal FC vs Manchester United FC",
+      "event_slug": "arsenal-vs-manchester-united",
+      "event_home_team": "Arsenal FC",
+      "event_away_team": "Manchester United FC",
+      "league_hint": "PL",
+      "active": true,
+      "closed": false,
+      "accepting_orders": true
+    }
+  ]
+}

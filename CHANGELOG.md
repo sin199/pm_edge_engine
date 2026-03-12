@@ -7,6 +7,8 @@ All notable changes to this project will be documented in this file.
 - Added structured GitHub issue templates for bugs and feature requests.
 - Added expanded example inputs, outputs, and usage notes under `examples/`.
 - Linked examples and support guidance from the main README.
+- Added a demo note with captured CLI outputs from a real-team sample payload.
+- Created public roadmap issues to make upcoming work visible and reviewable.
 
 ## [0.1.0] - 2026-03-12
 
