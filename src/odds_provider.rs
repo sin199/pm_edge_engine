@@ -148,3 +148,112 @@ fn normalize(s: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::calibration::CalibrationRegistry;
+    use crate::config::{CalibrationConfig, ModelConfig};
+    use crate::model_hybrid::combine_one_x_two;
+    use crate::types::OneXTwoProbs;
+    use chrono::TimeZone;
+
+    fn fixture_path(name: &str) -> String {
+        format!("{}/examples/{name}", env!("CARGO_MANIFEST_DIR"))
+    }
+
+    fn sample_match_key() -> MatchKey {
+        MatchKey {
+            league: "pl".to_string(),
+            home_team: "Team-A".to_string(),
+            away_team: "Team B".to_string(),
+            datetime_utc: Utc
+                .with_ymd_and_hms(2026, 2, 18, 18, 20, 0)
+                .single()
+                .expect("valid timestamp"),
+        }
+    }
+
+    fn approx_eq(a: f64, b: f64) {
+        assert!((a - b).abs() < 1e-9, "left={a} right={b}");
+    }
+
+    #[tokio::test]
+    async fn json_provider_loads_fixture_and_matches_normalized_key() -> Result<()> {
+        let provider = JsonOddsProvider::from_file(&fixture_path("odds_input_fresh.json"))?;
+        let odds = provider
+            .fetch_odds(&sample_match_key())
+            .await?
+            .expect("fixture odds should match");
+
+        approx_eq(odds.home, 4.0);
+        approx_eq(odds.draw, 4.0);
+        approx_eq(odds.away, 1.5);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fixture_backed_fresh_odds_change_blend_but_stale_odds_do_not() -> Result<()> {
+        let fresh_provider = JsonOddsProvider::from_file(&fixture_path("odds_input_fresh.json"))?;
+        let stale_provider = JsonOddsProvider::from_file(&fixture_path("odds_input_stale.json"))?;
+        let key = sample_match_key();
+        let fresh_odds = fresh_provider
+            .fetch_odds(&key)
+            .await?
+            .expect("fresh odds should match");
+        let stale_odds = stale_provider
+            .fetch_odds(&key)
+            .await?
+            .expect("stale odds should match");
+
+        let elo = OneXTwoProbs {
+            home: 0.60,
+            draw: 0.20,
+            away: 0.20,
+        };
+        let poisson = OneXTwoProbs {
+            home: 0.50,
+            draw: 0.25,
+            away: 0.25,
+        };
+        let cfg = ModelConfig::default();
+        let cal_cfg = CalibrationConfig::default();
+        let calibrators = CalibrationRegistry::default();
+
+        let without_odds = combine_one_x_two(
+            elo.clone(),
+            Some(poisson.clone()),
+            true,
+            None,
+            &cfg,
+            &cal_cfg,
+            &calibrators,
+        );
+        let with_fresh_odds = combine_one_x_two(
+            elo.clone(),
+            Some(poisson.clone()),
+            true,
+            Some(&fresh_odds),
+            &cfg,
+            &cal_cfg,
+            &calibrators,
+        );
+        let with_stale_odds = combine_one_x_two(
+            elo,
+            Some(poisson),
+            true,
+            Some(&stale_odds),
+            &cfg,
+            &cal_cfg,
+            &calibrators,
+        );
+
+        assert!(with_fresh_odds.away > without_odds.away);
+        assert!(with_fresh_odds.home < without_odds.home);
+
+        approx_eq(with_stale_odds.home, without_odds.home);
+        approx_eq(with_stale_odds.draw, without_odds.draw);
+        approx_eq(with_stale_odds.away, without_odds.away);
+        Ok(())
+    }
+}

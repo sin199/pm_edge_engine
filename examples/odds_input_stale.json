@@ -1,0 +1,12 @@
+[
+  {
+    "league": "PL",
+    "home_team": "Team A",
+    "away_team": "Team B",
+    "datetime_utc": "2026-02-18T18:00:00Z",
+    "home": 4.0,
+    "draw": 4.0,
+    "away": 1.5,
+    "fetched_at_utc": "2020-01-01T00:00:00Z"
+  }
+]

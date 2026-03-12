@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-03-12
+
+- Added deterministic JSON odds fixtures for fresh and stale provider coverage.
+- Added fixture-backed odds-provider tests that validate lookup matching and fresh/stale blend behavior.
+- Documented the odds fixture contract for future provider integrations.
+- Refreshed README contribution links after closing the odds-fixture roadmap item.
+
 ## [0.1.2] - 2026-03-12
 
 - Added an OpenLigaDB public fallback path for supported competitions when `FOOTBALL_DATA_TOKEN` is absent.

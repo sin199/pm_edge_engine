@@ -229,9 +229,7 @@ Dependabot tracks Cargo and GitHub Actions updates weekly, and CodeQL runs on pu
 
 Open roadmap issues:
 
-- [#1 Expand fixture-based end-to-end tests](https://github.com/sin199/pm_edge_engine/issues/1)
 - [#2 Add deterministic odds-provider fixtures](https://github.com/sin199/pm_edge_engine/issues/2)
-- [#3 Expand public examples and schema notes](https://github.com/sin199/pm_edge_engine/issues/3)
 - [#4 Broaden market mapping coverage](https://github.com/sin199/pm_edge_engine/issues/4)
 
 Current milestone:
@@ -240,7 +238,6 @@ Current milestone:
 
 Good ways to contribute right now:
 
-- [#2 Add deterministic odds-provider fixtures](https://github.com/sin199/pm_edge_engine/issues/2)
 - [#4 Broaden market mapping coverage](https://github.com/sin199/pm_edge_engine/issues/4)
 - [#5 Looking for sample markets and mapping misses](https://github.com/sin199/pm_edge_engine/issues/5)
 - [Q&A discussion](https://github.com/sin199/pm_edge_engine/discussions/7)
