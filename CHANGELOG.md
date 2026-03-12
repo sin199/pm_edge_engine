@@ -9,6 +9,8 @@ All notable changes to this project will be documented in this file.
 - Linked examples and support guidance from the main README.
 - Added a demo note with captured CLI outputs from a real-team sample payload.
 - Created public roadmap issues to make upcoming work visible and reviewable.
+- Enabled GitHub Discussions and added public feedback / Q&A threads.
+- Added reusable outreach copy for external launch posts.
 
 ## [0.1.0] - 2026-03-12
 

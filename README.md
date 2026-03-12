@@ -223,6 +223,14 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 Use the GitHub issue templates for bugs and feature requests. Include repro steps, example payloads, and the commit or release you tested against.
 
+Discussion entry points:
+
+- [Announcements / feedback thread](https://github.com/sin199/pm_edge_engine/discussions/6)
+- [Q&A for setup and output interpretation](https://github.com/sin199/pm_edge_engine/discussions/7)
+- [Feedback issue for sample markets and mapping misses](https://github.com/sin199/pm_edge_engine/issues/5)
+
+If you want to share the project externally, see [docs/OUTREACH.md](./docs/OUTREACH.md) for ready-to-post copy.
+
 ## Changelog
 
 See [CHANGELOG.md](./CHANGELOG.md).
