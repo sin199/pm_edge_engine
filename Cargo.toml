@@ -2,7 +2,10 @@
 name = "pm_edge_engine"
 version = "0.1.0"
 edition = "2024"
+description = "Deterministic Rust Polymarket sports edge engine with independent probability models"
 license = "MIT"
+repository = "https://github.com/sin199/pm_edge_engine"
+readme = "README.md"
 
 [dependencies]
 async-trait = "0.1"

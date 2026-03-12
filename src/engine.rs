@@ -177,3 +177,83 @@ fn effective_spread(e: &EvaluatedMarket) -> f64 {
     }
     e.market.spread.unwrap_or(0.02).clamp(0.0, 1.0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AppConfig;
+    use crate::types::{EvaluatedMarket, MarketRecord, MarketType};
+    use chrono::{Duration, Utc};
+
+    fn sample_market() -> MarketRecord {
+        MarketRecord {
+            market_slug: "team-a-win".to_string(),
+            question: "Will Team A win?".to_string(),
+            outcomes: vec!["Yes".to_string(), "No".to_string()],
+            prices: vec![0.40, 0.60],
+            best_bid: Some(0.39),
+            best_ask: Some(0.41),
+            spread: Some(0.02),
+            liquidity: 10_000.0,
+            volume: 20_000.0,
+            volume_5m: Some(1_500.0),
+            start_time_utc: Some(Utc::now() + Duration::minutes(60)),
+            event_title: Some("Team A vs Team B".to_string()),
+            event_slug: Some("team-a-vs-team-b".to_string()),
+            event_home_team: Some("Team A".to_string()),
+            event_away_team: Some("Team B".to_string()),
+            league_hint: Some("PL".to_string()),
+            active: true,
+            closed: false,
+            accepting_orders: true,
+        }
+    }
+
+    fn sample_eval() -> EvaluatedMarket {
+        EvaluatedMarket {
+            market: sample_market(),
+            fair_probs: vec![0.58, 0.42],
+            implied_probs: vec![0.40, 0.60],
+            edge: vec![0.18, -0.18],
+            match_rec: None,
+            match_confidence: 0.95,
+            market_type: MarketType::BinaryGenericYes,
+            confidence: 0.80,
+            reason_codes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn generates_buy_order_when_risk_checks_pass() {
+        let cfg = AppConfig::default();
+        let eval = sample_eval();
+
+        let (orders, decisions) = generate_orders(&[eval], &cfg, 1_000.0, 0.0);
+
+        assert_eq!(orders.orders.len(), 1);
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(orders.orders[0].side, "BUY");
+        assert_eq!(decisions[0].decision, "BUY");
+        assert!(decisions[0].recommended_size_fraction > 0.0);
+        assert!(decisions[0].recommended_size_fraction <= 0.03);
+    }
+
+    #[test]
+    fn invalid_market_state_forces_wait() {
+        let cfg = AppConfig::default();
+        let mut eval = sample_eval();
+        eval.market.active = false;
+
+        let (orders, decisions) = generate_orders(&[eval], &cfg, 1_000.0, 0.0);
+
+        assert!(orders.orders.is_empty());
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].decision, "WAIT");
+        assert!(
+            decisions[0]
+                .reason_codes
+                .iter()
+                .any(|code| code == "MARKET_STATE_INVALID")
+        );
+    }
+}

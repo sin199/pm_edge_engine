@@ -1,6 +1,23 @@
 # pm_edge_engine
 
+[![CI](https://github.com/sin199/pm_edge_engine/actions/workflows/ci.yml/badge.svg)](https://github.com/sin199/pm_edge_engine/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
 Deterministic Rust (tokio) Polymarket sports edge engine with independent probability models.
+
+## Status
+
+Early-stage open-source project focused on reproducible market evaluation and candidate order generation for Polymarket sports markets.
+
+This repository is opinionated about three things:
+
+- deterministic model output for the same input state
+- explicit JSON contracts for downstream tooling
+- risk-aware candidate generation instead of unconstrained trade chasing
+
+## Why this repo exists
+
+Most prediction-market tooling either copies market prices, hides model logic behind opaque services, or mixes research and execution state in ways that are hard to audit. `pm_edge_engine` is meant to be a transparent baseline that keeps pricing, calibration, mapping, and order filtering inspectable.
 
 ## Features
 
@@ -19,6 +36,15 @@ Deterministic Rust (tokio) Polymarket sports edge engine with independent probab
   - Match confidence gate in market mapping
   - Dynamic cost model and dynamic min-edge in order engine
   - League-wise Poisson auto-degrade (<800 matches => ELO-only)
+
+## Safety boundaries
+
+This repository does not claim guaranteed profitability. It is an execution-support engine with explicit filters and conservative defaults.
+
+- Invalid market state should resolve to no action.
+- Model confidence and market liquidity gates are enforced before order generation.
+- Near-event and high-cost setups are filtered out.
+- Generated orders are candidate outputs; production deployment still requires separate operational controls, monitoring, and secrets handling.
 
 ## Requirements
 
@@ -67,6 +93,14 @@ Scheduler behavior:
 - every 15 minutes: refresh Polymarket markets
 - every 60 minutes: refresh football-data + retrain
 - after refresh: writes `fair_probs.json` + `orders.json` (if enabled)
+
+## Primary workflow
+
+1. Fetch market and match data.
+2. Train or refresh league models.
+3. Map Polymarket markets to football fixtures.
+4. Produce fair probabilities.
+5. Generate candidate orders only when edge, confidence, liquidity, and timing filters pass.
 
 ## CLI
 
@@ -144,6 +178,33 @@ Runtime env overrides:
 - No API keys are hardcoded.
 - Model output is deterministic for the same input state.
 - If football-data token is missing, `fetch` skips football ingestion without crashing.
+
+## Development
+
+Run the local validation loop:
+
+```bash
+cargo fmt --all
+cargo check --all-targets
+cargo test --all-targets
+```
+
+CI runs the same checks on pushes to `main` and on pull requests.
+
+## Roadmap
+
+- Expand unit and fixture-based test coverage across market mapping and calibration flows.
+- Add more examples for input preparation and output interpretation.
+- Add release notes and tagged versions as the CLI and JSON contracts stabilize.
+- Broaden odds-provider integrations while keeping deterministic fallbacks.
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md).
 
 ## License
 
