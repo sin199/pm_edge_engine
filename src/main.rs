@@ -7,6 +7,7 @@ mod model_elo;
 mod model_hybrid;
 mod model_poisson;
 mod odds_provider;
+mod openligadb;
 mod polymarket_gamma;
 mod storage;
 mod types;
@@ -21,6 +22,7 @@ use model_elo::EloModel;
 use model_hybrid::combine_one_x_two;
 use model_poisson::{LeaguePoissonModel, train_by_league};
 use odds_provider::build_odds_provider;
+use openligadb::OpenLigaDbClient;
 use polymarket_gamma::GammaClient;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -85,7 +87,7 @@ async fn main() -> Result<()> {
     let cfg = AppConfig::load()?;
     let storage = Storage::new(&cfg.database.path).await?;
     let http = Client::builder()
-        .user_agent("pm_edge_engine/0.1.1")
+        .user_agent("pm_edge_engine/0.1.2")
         .build()
         .context("build reqwest client")?;
 
@@ -222,20 +224,53 @@ async fn fetch_markets_only(cfg: &AppConfig, storage: &Storage, http: &Client) -
 }
 
 async fn fetch_football_only(cfg: &AppConfig, storage: &Storage, http: &Client) -> Result<usize> {
-    let Some(token) = cfg.football_token() else {
+    if let Some(token) = cfg.football_token() {
+        let fd = FootballDataClient::new(http.clone(), cfg.football.clone(), token);
+        let mut rows = fd.fetch_incremental().await?;
+        let hist = fd.fetch_historical().await.unwrap_or_default();
+        rows.extend(hist);
+        dedup_matches(&mut rows);
+        storage.upsert_matches(&rows).await?;
+        info!("football-data fetched matches={}", rows.len());
+        return Ok(rows.len());
+    }
+
+    if !cfg.football.public_fallback_enabled {
         warn!(
-            "{} not set, skip football-data fetch",
+            "{} not set and public fallback disabled, skip football fetch",
             cfg.football.token_env
         );
         return Ok(0);
-    };
-    let fd = FootballDataClient::new(http.clone(), cfg.football.clone(), token);
-    let mut rows = fd.fetch_incremental().await?;
-    let hist = fd.fetch_historical().await.unwrap_or_default();
+    }
+
+    let openligadb = OpenLigaDbClient::new(http.clone(), cfg.football.clone());
+    let shortcuts = openligadb.mapped_shortcuts();
+    let unsupported = openligadb.unsupported_competitions();
+
+    if shortcuts.is_empty() {
+        warn!(
+            "{} not set and OpenLigaDB fallback has no supported competition mapping for {:?}",
+            cfg.football.token_env, cfg.football.competitions
+        );
+        return Ok(0);
+    }
+    if !unsupported.is_empty() {
+        warn!(
+            "OpenLigaDB fallback skips unsupported competitions={:?}",
+            unsupported
+        );
+    }
+
+    let mut rows = openligadb.fetch_incremental().await?;
+    let hist = openligadb.fetch_historical().await.unwrap_or_default();
     rows.extend(hist);
     dedup_matches(&mut rows);
     storage.upsert_matches(&rows).await?;
-    info!("football-data fetched matches={}", rows.len());
+    info!(
+        "openligadb fallback fetched matches={} shortcuts={:?}",
+        rows.len(),
+        shortcuts
+    );
     Ok(rows.len())
 }
 
@@ -515,4 +550,116 @@ fn _write_json<P: AsRef<Path>, T: Serialize>(path: P, value: &T) -> Result<()> {
     let data = serde_json::to_string_pretty(value)?;
     fs::write(path, data)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine;
+    use crate::storage::Storage;
+    use crate::types::MatchRecord;
+    use chrono::TimeZone;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn fixture_path(name: &str) -> String {
+        format!("{}/examples/{name}", env!("CARGO_MANIFEST_DIR"))
+    }
+
+    fn unique_db_path(test_name: &str) -> String {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        std::env::temp_dir()
+            .join(format!("pm_edge_engine_{test_name}_{nanos}.db"))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn cleanup_db(path: &str) {
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = fs::remove_file(format!("{path}{suffix}"));
+        }
+    }
+
+    fn fixture_match(match_time: chrono::DateTime<Utc>) -> MatchRecord {
+        MatchRecord {
+            id: format!("fixture-{}", match_time.timestamp()),
+            league: "PL".to_string(),
+            season: "2098".to_string(),
+            datetime_utc: match_time,
+            home_team: "Team A".to_string(),
+            away_team: "Team B".to_string(),
+            home_goals: None,
+            away_goals: None,
+            status: "SCHEDULED".to_string(),
+        }
+    }
+
+    async fn storage_with_match(
+        db_path: &str,
+        match_time: chrono::DateTime<Utc>,
+    ) -> Result<Storage> {
+        let storage = Storage::new(db_path).await?;
+        storage.upsert_matches(&[fixture_match(match_time)]).await?;
+        Ok(storage)
+    }
+
+    #[tokio::test]
+    async fn extended_example_fixture_runs_through_predict_flow() -> Result<()> {
+        let fixture = fixture_path("markets_input_extended.json");
+        let markets = load_markets_input(&fixture)?;
+        let db_path = unique_db_path("extended_predict");
+        let match_time = Utc
+            .with_ymd_and_hms(2026, 2, 18, 18, 0, 0)
+            .single()
+            .expect("valid timestamp");
+        let storage = storage_with_match(&db_path, match_time).await?;
+        let cfg = AppConfig::default();
+
+        let fair = predict_fair_probs(&cfg, &storage, &markets).await?;
+
+        assert_eq!(fair.results.len(), markets.len());
+        for (result, market) in fair.results.iter().zip(markets.iter()) {
+            assert_eq!(result.market_slug, market.market_slug);
+            assert_eq!(result.fair_probs.len(), market.outcomes.len());
+            let sum: f64 = result.fair_probs.iter().sum();
+            assert!((sum - 1.0).abs() < 1e-9);
+        }
+
+        drop(storage);
+        cleanup_db(&db_path);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn wait_fixture_yields_empty_orders_and_market_state_reason() -> Result<()> {
+        let fixture = fixture_path("markets_input_wait.json");
+        let markets = load_markets_input(&fixture)?;
+        let db_path = unique_db_path("wait_fixture");
+        let match_time = Utc
+            .with_ymd_and_hms(2099, 1, 1, 12, 0, 0)
+            .single()
+            .expect("valid timestamp");
+        let storage = storage_with_match(&db_path, match_time).await?;
+        let cfg = AppConfig::default();
+
+        let (_fair, evaluated, _mapper_decisions) =
+            evaluate_for_candidates(&cfg, &storage, &markets).await?;
+        let (orders, decisions) = engine::generate_orders(&evaluated, &cfg, 100.0, 0.0);
+
+        assert!(orders.orders.is_empty());
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].decision, "WAIT");
+        assert!(
+            decisions[0]
+                .reason_codes
+                .iter()
+                .any(|code| code == "MARKET_STATE_INVALID")
+        );
+
+        drop(storage);
+        cleanup_db(&db_path);
+        Ok(())
+    }
 }

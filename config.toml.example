@@ -19,6 +19,8 @@ lookback_days = 30
 forward_days = 14
 request_timeout_secs = 25
 retries = 5
+public_fallback_enabled = true
+public_fallback_base_url = "https://api.openligadb.de"
 
 [model]
 elo_k = 18.0

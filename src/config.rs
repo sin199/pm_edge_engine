@@ -46,6 +46,8 @@ pub struct FootballConfig {
     pub forward_days: i64,
     pub request_timeout_secs: u64,
     pub retries: usize,
+    pub public_fallback_enabled: bool,
+    pub public_fallback_base_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,6 +170,8 @@ impl Default for FootballConfig {
             forward_days: 14,
             request_timeout_secs: 25,
             retries: 5,
+            public_fallback_enabled: true,
+            public_fallback_base_url: "https://api.openligadb.de".to_string(),
         }
     }
 }
@@ -273,6 +277,10 @@ impl AppConfig {
             if !parsed.is_empty() {
                 self.football.competitions = parsed;
             }
+        }
+        if let Ok(v) = env::var("PM_EDGE_PUBLIC_FOOTBALL_FALLBACK_ENABLED") {
+            self.football.public_fallback_enabled =
+                matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on");
         }
         if let Ok(v) = env::var("PM_EDGE_BASE_MIN_EDGE") {
             if let Ok(x) = v.parse::<f64>() {

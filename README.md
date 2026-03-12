@@ -27,6 +27,7 @@ Most prediction-market tooling either copies market prices, hides model logic be
 - Data ingestion:
   - Polymarket Gamma API (`/markets`, `/markets/slug/{slug}`)
   - football-data.org v4 matches/results
+  - OpenLigaDB public fallback for supported competitions when `FOOTBALL_DATA_TOKEN` is absent
 - SQLite cache with WAL mode
 - Models:
   - ELO baseline (time decay)
@@ -51,8 +52,10 @@ This repository does not claim guaranteed profitability. It is an execution-supp
 ## Requirements
 
 - Rust stable
-- Environment variable:
-  - `FOOTBALL_DATA_TOKEN` (required for football-data fetch)
+- Optional environment variable:
+  - `FOOTBALL_DATA_TOKEN` (used as the primary football-data source when present)
+
+Without `FOOTBALL_DATA_TOKEN`, `fetch` can fall back to OpenLigaDB for supported competitions such as Bundesliga and selected UEFA competitions.
 
 ## Quick Start
 
@@ -93,7 +96,7 @@ cargo run -- run
 
 Scheduler behavior:
 - every 15 minutes: refresh Polymarket markets
-- every 60 minutes: refresh football-data + retrain
+- every 60 minutes: refresh football-data or public fallback + retrain
 - after refresh: writes `fair_probs.json` + `orders.json` (if enabled)
 
 ## Primary workflow
@@ -174,6 +177,7 @@ See [examples/README.md](./examples/README.md) for:
 
 - minimal and extended market input payloads
 - annotated notes for the extended example
+- a deterministic WAIT fixture and empty-order example
 - example fair-probability and order outputs
 - copy-paste commands for local prediction and candidate generation
 - JSON schema references for downstream tooling
@@ -189,6 +193,7 @@ Runtime env overrides:
 - `PM_EDGE_DB_PATH`
 - `FOOTBALL_DATA_TOKEN`
 - `FOOTBALL_COMPETITIONS`
+- `PM_EDGE_PUBLIC_FOOTBALL_FALLBACK_ENABLED`
 - `PM_EDGE_BASE_MIN_EDGE`
 - `PM_EDGE_MIN_MATCH_CONFIDENCE`
 - `PM_EDGE_ODDS_ENABLED`
@@ -197,7 +202,9 @@ Runtime env overrides:
 
 - No API keys are hardcoded.
 - Model output is deterministic for the same input state.
-- If football-data token is missing, `fetch` skips football ingestion without crashing.
+- If `FOOTBALL_DATA_TOKEN` is missing and public fallback is enabled, `fetch` uses OpenLigaDB for supported competition codes (`BL1`, `CL`/`UCL`, `EL`/`UEL`, best-effort `PL`).
+- Unsupported fallback competition codes remain explicit skips, not silent substitutions.
+- If `FOOTBALL_DATA_TOKEN` is missing and public fallback is disabled, `fetch` skips football ingestion without crashing.
 
 ## Development
 
@@ -210,6 +217,7 @@ cargo test --all-targets
 ```
 
 CI runs the same checks on pushes to `main` and on pull requests.
+The test suite now includes example-driven fixture coverage for both a mapped `predict` flow and a deterministic `WAIT` candidate path.
 Dependabot tracks Cargo and GitHub Actions updates weekly, and CodeQL runs on pushes, pull requests, and a scheduled scan.
 
 ## Roadmap
@@ -232,8 +240,8 @@ Current milestone:
 
 Good ways to contribute right now:
 
-- [#10 Add command-level fixture test harness for example payloads](https://github.com/sin199/pm_edge_engine/issues/10)
-- [#11 Add fixture input that should deterministically WAIT](https://github.com/sin199/pm_edge_engine/issues/11)
+- [#2 Add deterministic odds-provider fixtures](https://github.com/sin199/pm_edge_engine/issues/2)
+- [#4 Broaden market mapping coverage](https://github.com/sin199/pm_edge_engine/issues/4)
 - [#5 Looking for sample markets and mapping misses](https://github.com/sin199/pm_edge_engine/issues/5)
 - [Q&A discussion](https://github.com/sin199/pm_edge_engine/discussions/7)
 

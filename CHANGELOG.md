@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-03-12
+
+- Added an OpenLigaDB public fallback path for supported competitions when `FOOTBALL_DATA_TOKEN` is absent.
+- Added fixture-driven tests that exercise the example `predict` flow and a deterministic `WAIT` candidate path.
+- Added `examples/markets_input_wait.json` plus documentation for the no-trade fixture and empty-order output.
+- Documented how maintainers should update fixtures when schema or behavior intentionally changes.
+- Refreshed README contribution links after closing the fixture-test roadmap tasks.
+
 ## [0.1.1] - 2026-03-12
 
 - Added explicit JSON contract documentation for input, `predict`, and `candidates` payloads.
