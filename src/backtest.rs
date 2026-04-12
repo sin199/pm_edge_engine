@@ -1083,6 +1083,7 @@ fn resolve_trade_outcome(
                 return None;
             }
         }
+        MarketType::TotalsUnder { .. } | MarketType::SpreadAwayCover { .. } => return None,
         MarketType::BinaryGenericYes | MarketType::Unknown => return None,
     };
 

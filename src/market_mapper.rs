@@ -187,6 +187,7 @@ pub async fn evaluate_markets(
                     )
                 }
                 MarketType::BinaryGenericYes => generic_binary_yes(),
+                MarketType::TotalsUnder { .. } | MarketType::SpreadAwayCover { .. } => 0.5,
                 MarketType::Unknown => 0.5,
             }
             .clamp(0.0001, 0.9999);

@@ -293,6 +293,7 @@ fn resolve_yes_outcome(eval: &EvaluatedMarket) -> Option<bool> {
                 return None;
             }
         }
+        MarketType::TotalsUnder { .. } | MarketType::SpreadAwayCover { .. } => return None,
         MarketType::BinaryGenericYes | MarketType::Unknown => return None,
     })
 }
