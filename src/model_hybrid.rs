@@ -2,7 +2,7 @@ use crate::calibration::CalibrationRegistry;
 use crate::config::{CalibrationConfig, ModelConfig};
 use crate::odds_provider::BookOdds;
 use crate::types::OneXTwoProbs;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone)]
 pub struct HybridWeights {
@@ -20,20 +20,29 @@ pub fn combine_one_x_two(
     cal_cfg: &CalibrationConfig,
     calibrators: &CalibrationRegistry,
 ) -> OneXTwoProbs {
-    if !poisson_enabled {
-        let mut p = elo;
-        if cal_cfg.enabled {
-            p.home = calibrators.apply("oneXtwo_home", p.home);
-            p.draw = calibrators.apply("oneXtwo_draw", p.draw);
-            p.away = calibrators.apply("oneXtwo_away", p.away);
-            let (h, d, a) = normalize3(p.home, p.draw, p.away);
-            p.home = h;
-            p.draw = d;
-            p.away = a;
-        }
-        return p;
-    }
+    combine_one_x_two_at(
+        elo,
+        poisson,
+        poisson_enabled,
+        maybe_odds,
+        cfg,
+        cal_cfg,
+        calibrators,
+        Utc::now(),
+    )
+}
 
+#[allow(clippy::too_many_arguments)]
+pub fn combine_one_x_two_at(
+    elo: OneXTwoProbs,
+    poisson: Option<OneXTwoProbs>,
+    poisson_enabled: bool,
+    maybe_odds: Option<&BookOdds>,
+    cfg: &ModelConfig,
+    cal_cfg: &CalibrationConfig,
+    calibrators: &CalibrationRegistry,
+    evaluation_time: DateTime<Utc>,
+) -> OneXTwoProbs {
     let p_poi = poisson.unwrap_or_else(|| elo.clone());
     let mut weights = HybridWeights {
         w_poisson: cfg.hybrid_poisson_weight,
@@ -42,31 +51,36 @@ pub fn combine_one_x_two(
     };
 
     let mut p_odds: Option<OneXTwoProbs> = None;
-    if let Some(odds) = maybe_odds {
-        let age_minutes = (Utc::now() - odds.fetched_at_utc).num_minutes().max(0);
-        if age_minutes <= 60 {
-            weights = HybridWeights {
-                w_poisson: 0.35,
-                w_elo: 0.20,
-                w_odds: 0.45,
-            };
-            p_odds = odds_to_probs(odds);
-        } else if age_minutes <= 240 {
-            weights = HybridWeights {
-                w_poisson: 0.35,
-                w_elo: 0.20,
-                w_odds: 0.25,
-            };
-            p_odds = odds_to_probs(odds);
-        }
+    if let Some(odds) = maybe_odds
+        && let Some(odds_weights) =
+            odds_blend_weights_at(poisson_enabled, Some(odds), evaluation_time)
+    {
+        weights = odds_weights;
+        p_odds = odds_to_probs(odds);
     }
 
     let (h, d, a) = if let Some(po) = p_odds {
-        normalize3(
-            weights.w_poisson * p_poi.home + weights.w_elo * elo.home + weights.w_odds * po.home,
-            weights.w_poisson * p_poi.draw + weights.w_elo * elo.draw + weights.w_odds * po.draw,
-            weights.w_poisson * p_poi.away + weights.w_elo * elo.away + weights.w_odds * po.away,
-        )
+        if poisson_enabled {
+            normalize3(
+                weights.w_poisson * p_poi.home
+                    + weights.w_elo * elo.home
+                    + weights.w_odds * po.home,
+                weights.w_poisson * p_poi.draw
+                    + weights.w_elo * elo.draw
+                    + weights.w_odds * po.draw,
+                weights.w_poisson * p_poi.away
+                    + weights.w_elo * elo.away
+                    + weights.w_odds * po.away,
+            )
+        } else {
+            normalize3(
+                weights.w_elo * elo.home + weights.w_odds * po.home,
+                weights.w_elo * elo.draw + weights.w_odds * po.draw,
+                weights.w_elo * elo.away + weights.w_odds * po.away,
+            )
+        }
+    } else if !poisson_enabled {
+        normalize3(elo.home, elo.draw, elo.away)
     } else {
         normalize3(
             weights.w_poisson * p_poi.home + weights.w_elo * elo.home,
@@ -81,7 +95,7 @@ pub fn combine_one_x_two(
         away: a,
     };
 
-    if cal_cfg.enabled {
+    if cal_cfg.enabled || !calibrators.is_empty() {
         out.home = calibrators.apply("oneXtwo_home", out.home);
         out.draw = calibrators.apply("oneXtwo_draw", out.draw);
         out.away = calibrators.apply("oneXtwo_away", out.away);
@@ -92,6 +106,49 @@ pub fn combine_one_x_two(
     }
 
     out
+}
+
+pub fn odds_blend_weights_at(
+    poisson_enabled: bool,
+    maybe_odds: Option<&BookOdds>,
+    evaluation_time: DateTime<Utc>,
+) -> Option<HybridWeights> {
+    let odds = maybe_odds?;
+    let age_minutes = (evaluation_time - odds.fetched_at_utc).num_minutes().max(0);
+
+    if poisson_enabled {
+        if age_minutes <= 60 {
+            return Some(HybridWeights {
+                w_poisson: 0.35,
+                w_elo: 0.20,
+                w_odds: 0.45,
+            });
+        }
+        if age_minutes <= 240 {
+            return Some(HybridWeights {
+                w_poisson: 0.35,
+                w_elo: 0.40,
+                w_odds: 0.25,
+            });
+        }
+        return None;
+    }
+
+    if age_minutes <= 60 {
+        return Some(HybridWeights {
+            w_poisson: 0.0,
+            w_elo: 0.45,
+            w_odds: 0.55,
+        });
+    }
+    if age_minutes <= 240 {
+        return Some(HybridWeights {
+            w_poisson: 0.0,
+            w_elo: 0.75,
+            w_odds: 0.25,
+        });
+    }
+    None
 }
 
 pub fn combine_binary_prob(
@@ -111,7 +168,7 @@ pub fn combine_binary_prob(
     };
 
     p = p.clamp(0.0001, 0.9999);
-    if cal_cfg.enabled {
+    if cal_cfg.enabled || !calibrators.is_empty() {
         p = calibrators.apply(calib_key, p).clamp(0.0001, 0.9999);
     }
     p
@@ -181,6 +238,40 @@ mod tests {
         approx_eq(out.home, elo.home);
         approx_eq(out.draw, elo.draw);
         approx_eq(out.away, elo.away);
+    }
+
+    #[test]
+    fn fresh_odds_are_blended_when_poisson_is_disabled() {
+        let elo = OneXTwoProbs {
+            home: 0.52,
+            draw: 0.24,
+            away: 0.24,
+        };
+        let odds = BookOdds {
+            home: 4.0,
+            draw: 4.0,
+            away: 1.5,
+            totals: None,
+            btts_yes: None,
+            btts_no: None,
+            fetched_at_utc: Utc::now() - Duration::minutes(10),
+        };
+        let implied = odds_to_probs(&odds).expect("valid odds");
+
+        let out = combine_one_x_two(
+            elo.clone(),
+            None,
+            false,
+            Some(&odds),
+            &ModelConfig::default(),
+            &CalibrationConfig::default(),
+            &CalibrationRegistry::default(),
+        );
+
+        approx_eq(out.home, 0.45 * elo.home + 0.55 * implied.home);
+        approx_eq(out.draw, 0.45 * elo.draw + 0.55 * implied.draw);
+        approx_eq(out.away, 0.45 * elo.away + 0.55 * implied.away);
+        approx_eq(out.home + out.draw + out.away, 1.0);
     }
 
     #[test]

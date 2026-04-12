@@ -30,6 +30,49 @@ pub struct CalibrationSample {
     pub label: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CalibrationSampleRecord {
+    pub source: String,
+    pub source_cycle_id: String,
+    pub source_run_id: String,
+    pub source_path: String,
+    pub source_snapshot_id: Option<String>,
+    pub source_mode: Option<String>,
+    pub sample_id: String,
+    pub trade_key: String,
+    pub market_type: String,
+    pub market_slug: String,
+    pub market_id: String,
+    pub event_key: Option<String>,
+    pub event_id: Option<String>,
+    pub event_title: Option<String>,
+    pub market_sector: Option<String>,
+    pub market_family: Option<String>,
+    pub market_family_bucket: Option<String>,
+    pub outcome_index: Option<i64>,
+    pub decision: Option<String>,
+    pub order_side: Option<String>,
+    pub ts_utc: String,
+    pub p_raw: f64,
+    pub label: f64,
+    pub implied_prob: Option<f64>,
+    pub fair_prob: Option<f64>,
+    pub signal_price: Option<f64>,
+    pub signal_bid: Option<f64>,
+    pub signal_ask: Option<f64>,
+    pub confidence: Option<f64>,
+    pub edge: Option<f64>,
+    pub effective_edge: Option<f64>,
+    pub recommended_size_fraction: Option<f64>,
+    pub allocation_rank: Option<i64>,
+    pub filled: Option<i64>,
+    pub resolved: Option<i64>,
+    pub order_size_usdc: Option<f64>,
+    pub realized_pnl_usdc: Option<f64>,
+    pub slippage_bps: Option<f64>,
+    pub raw_json: Option<String>,
+}
+
 impl Storage {
     pub async fn new(path: &str) -> Result<Self> {
         let opts = SqliteConnectOptions::from_str(path)
@@ -129,10 +172,45 @@ impl Storage {
 
             CREATE TABLE IF NOT EXISTS calibration_samples(
               id INTEGER PRIMARY KEY AUTOINCREMENT,
+              source TEXT NOT NULL DEFAULT 'core_match_results',
+              source_cycle_id TEXT NULL,
+              source_run_id TEXT NULL,
+              source_path TEXT NULL,
+              source_snapshot_id TEXT NULL,
+              source_mode TEXT NULL,
+              sample_id TEXT NULL,
+              trade_key TEXT NULL,
               market_type TEXT NOT NULL,
               ts_utc TEXT NOT NULL,
               p_raw REAL NOT NULL,
-              label REAL NOT NULL
+              label REAL NOT NULL,
+              market_slug TEXT NULL,
+              market_id TEXT NULL,
+              event_key TEXT NULL,
+              event_id TEXT NULL,
+              event_title TEXT NULL,
+              market_sector TEXT NULL,
+              market_family TEXT NULL,
+              market_family_bucket TEXT NULL,
+              outcome_index INTEGER NULL,
+              decision TEXT NULL,
+              order_side TEXT NULL,
+              implied_prob REAL NULL,
+              fair_prob REAL NULL,
+              signal_price REAL NULL,
+              signal_bid REAL NULL,
+              signal_ask REAL NULL,
+              confidence REAL NULL,
+              edge REAL NULL,
+              effective_edge REAL NULL,
+              recommended_size_fraction REAL NULL,
+              allocation_rank INTEGER NULL,
+              filled INTEGER NULL,
+              resolved INTEGER NULL,
+              order_size_usdc REAL NULL,
+              realized_pnl_usdc REAL NULL,
+              slippage_bps REAL NULL,
+              raw_json TEXT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_calibration_samples_type_time ON calibration_samples(market_type, ts_utc);
 
@@ -148,6 +226,173 @@ impl Storage {
         .await
         .context("create schema")?;
 
+        self.ensure_calibration_sample_migrations().await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_calibration_samples_source_type_time ON calibration_samples(source, market_type, ts_utc)",
+        )
+        .execute(&self.pool)
+        .await
+        .context("create calibration_samples source index")?;
+        Ok(())
+    }
+
+    async fn ensure_calibration_sample_migrations(&self) -> Result<()> {
+        let rows = sqlx::query("PRAGMA table_info(calibration_samples)")
+            .fetch_all(&self.pool)
+            .await?;
+        let mut cols = std::collections::HashSet::new();
+        for row in rows {
+            let name: String = row.try_get("name")?;
+            cols.insert(name);
+        }
+
+        let columns = [
+            (
+                "source",
+                "ALTER TABLE calibration_samples ADD COLUMN source TEXT NOT NULL DEFAULT 'core_match_results'",
+            ),
+            (
+                "source_cycle_id",
+                "ALTER TABLE calibration_samples ADD COLUMN source_cycle_id TEXT NULL",
+            ),
+            (
+                "source_run_id",
+                "ALTER TABLE calibration_samples ADD COLUMN source_run_id TEXT NULL",
+            ),
+            (
+                "source_path",
+                "ALTER TABLE calibration_samples ADD COLUMN source_path TEXT NULL",
+            ),
+            (
+                "source_snapshot_id",
+                "ALTER TABLE calibration_samples ADD COLUMN source_snapshot_id TEXT NULL",
+            ),
+            (
+                "source_mode",
+                "ALTER TABLE calibration_samples ADD COLUMN source_mode TEXT NULL",
+            ),
+            (
+                "sample_id",
+                "ALTER TABLE calibration_samples ADD COLUMN sample_id TEXT NULL",
+            ),
+            (
+                "trade_key",
+                "ALTER TABLE calibration_samples ADD COLUMN trade_key TEXT NULL",
+            ),
+            (
+                "market_slug",
+                "ALTER TABLE calibration_samples ADD COLUMN market_slug TEXT NULL",
+            ),
+            (
+                "market_id",
+                "ALTER TABLE calibration_samples ADD COLUMN market_id TEXT NULL",
+            ),
+            (
+                "event_key",
+                "ALTER TABLE calibration_samples ADD COLUMN event_key TEXT NULL",
+            ),
+            (
+                "event_id",
+                "ALTER TABLE calibration_samples ADD COLUMN event_id TEXT NULL",
+            ),
+            (
+                "event_title",
+                "ALTER TABLE calibration_samples ADD COLUMN event_title TEXT NULL",
+            ),
+            (
+                "market_sector",
+                "ALTER TABLE calibration_samples ADD COLUMN market_sector TEXT NULL",
+            ),
+            (
+                "market_family",
+                "ALTER TABLE calibration_samples ADD COLUMN market_family TEXT NULL",
+            ),
+            (
+                "market_family_bucket",
+                "ALTER TABLE calibration_samples ADD COLUMN market_family_bucket TEXT NULL",
+            ),
+            (
+                "outcome_index",
+                "ALTER TABLE calibration_samples ADD COLUMN outcome_index INTEGER NULL",
+            ),
+            (
+                "decision",
+                "ALTER TABLE calibration_samples ADD COLUMN decision TEXT NULL",
+            ),
+            (
+                "order_side",
+                "ALTER TABLE calibration_samples ADD COLUMN order_side TEXT NULL",
+            ),
+            (
+                "implied_prob",
+                "ALTER TABLE calibration_samples ADD COLUMN implied_prob REAL NULL",
+            ),
+            (
+                "fair_prob",
+                "ALTER TABLE calibration_samples ADD COLUMN fair_prob REAL NULL",
+            ),
+            (
+                "signal_price",
+                "ALTER TABLE calibration_samples ADD COLUMN signal_price REAL NULL",
+            ),
+            (
+                "signal_bid",
+                "ALTER TABLE calibration_samples ADD COLUMN signal_bid REAL NULL",
+            ),
+            (
+                "signal_ask",
+                "ALTER TABLE calibration_samples ADD COLUMN signal_ask REAL NULL",
+            ),
+            (
+                "confidence",
+                "ALTER TABLE calibration_samples ADD COLUMN confidence REAL NULL",
+            ),
+            (
+                "edge",
+                "ALTER TABLE calibration_samples ADD COLUMN edge REAL NULL",
+            ),
+            (
+                "effective_edge",
+                "ALTER TABLE calibration_samples ADD COLUMN effective_edge REAL NULL",
+            ),
+            (
+                "recommended_size_fraction",
+                "ALTER TABLE calibration_samples ADD COLUMN recommended_size_fraction REAL NULL",
+            ),
+            (
+                "allocation_rank",
+                "ALTER TABLE calibration_samples ADD COLUMN allocation_rank INTEGER NULL",
+            ),
+            (
+                "filled",
+                "ALTER TABLE calibration_samples ADD COLUMN filled INTEGER NULL",
+            ),
+            (
+                "resolved",
+                "ALTER TABLE calibration_samples ADD COLUMN resolved INTEGER NULL",
+            ),
+            (
+                "order_size_usdc",
+                "ALTER TABLE calibration_samples ADD COLUMN order_size_usdc REAL NULL",
+            ),
+            (
+                "realized_pnl_usdc",
+                "ALTER TABLE calibration_samples ADD COLUMN realized_pnl_usdc REAL NULL",
+            ),
+            (
+                "slippage_bps",
+                "ALTER TABLE calibration_samples ADD COLUMN slippage_bps REAL NULL",
+            ),
+            (
+                "raw_json",
+                "ALTER TABLE calibration_samples ADD COLUMN raw_json TEXT NULL",
+            ),
+        ];
+        for (name, ddl) in columns {
+            if !cols.contains(name) {
+                sqlx::query(ddl).execute(&self.pool).await?;
+            }
+        }
         Ok(())
     }
 
@@ -425,6 +670,31 @@ impl Storage {
         Ok(())
     }
 
+    pub async fn replace_markets(&self, markets: &[MarketRecord]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM markets_cache")
+            .execute(&mut *tx)
+            .await?;
+
+        let now = Utc::now().to_rfc3339();
+        for m in markets {
+            let raw = serde_json::to_string(m).context("serialize market")?;
+            sqlx::query(
+                r#"
+                INSERT INTO markets_cache(market_slug, raw_json, updated_at)
+                VALUES(?1, ?2, ?3)
+                "#,
+            )
+            .bind(&m.market_slug)
+            .bind(raw)
+            .bind(&now)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn load_cached_markets(&self) -> Result<Vec<MarketRecord>> {
         let rows = sqlx::query("SELECT raw_json FROM markets_cache")
             .fetch_all(&self.pool)
@@ -496,6 +766,158 @@ impl Storage {
         }
         tx.commit().await?;
         Ok(())
+    }
+
+    pub async fn replace_calibration_samples_for_source(
+        &self,
+        source: &str,
+        rows: &[CalibrationSampleRecord],
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM calibration_samples WHERE source=?1")
+            .bind(source)
+            .execute(&mut *tx)
+            .await?;
+
+        for s in rows {
+            sqlx::query(
+                r#"
+                INSERT INTO calibration_samples(
+                  source, source_cycle_id, source_run_id, source_path, source_snapshot_id, source_mode,
+                  sample_id, trade_key, market_type, ts_utc, p_raw, label,
+                  market_slug, market_id, event_key, event_id, event_title,
+                  market_sector, market_family, market_family_bucket,
+                  outcome_index, decision, order_side,
+                  implied_prob, fair_prob, signal_price, signal_bid, signal_ask,
+                  confidence, edge, effective_edge, recommended_size_fraction,
+                  allocation_rank, filled, resolved, order_size_usdc,
+                  realized_pnl_usdc, slippage_bps, raw_json
+                )
+                VALUES(
+                  ?1, ?2, ?3, ?4, ?5, ?6,
+                  ?7, ?8, ?9, ?10, ?11, ?12,
+                  ?13, ?14, ?15, ?16, ?17,
+                  ?18, ?19, ?20,
+                  ?21, ?22, ?23,
+                  ?24, ?25, ?26, ?27, ?28,
+                  ?29, ?30, ?31, ?32,
+                  ?33, ?34, ?35, ?36,
+                  ?37, ?38, ?39
+                )
+                "#,
+            )
+            .bind(&s.source)
+            .bind(&s.source_cycle_id)
+            .bind(&s.source_run_id)
+            .bind(&s.source_path)
+            .bind(&s.source_snapshot_id)
+            .bind(&s.source_mode)
+            .bind(&s.sample_id)
+            .bind(&s.trade_key)
+            .bind(&s.market_type)
+            .bind(&s.ts_utc)
+            .bind(s.p_raw)
+            .bind(s.label)
+            .bind(&s.market_slug)
+            .bind(&s.market_id)
+            .bind(&s.event_key)
+            .bind(&s.event_id)
+            .bind(&s.event_title)
+            .bind(&s.market_sector)
+            .bind(&s.market_family)
+            .bind(&s.market_family_bucket)
+            .bind(s.outcome_index)
+            .bind(&s.decision)
+            .bind(&s.order_side)
+            .bind(s.implied_prob)
+            .bind(s.fair_prob)
+            .bind(s.signal_price)
+            .bind(s.signal_bid)
+            .bind(s.signal_ask)
+            .bind(s.confidence)
+            .bind(s.edge)
+            .bind(s.effective_edge)
+            .bind(s.recommended_size_fraction)
+            .bind(s.allocation_rank)
+            .bind(s.filled)
+            .bind(s.resolved)
+            .bind(s.order_size_usdc)
+            .bind(s.realized_pnl_usdc)
+            .bind(s.slippage_bps)
+            .bind(&s.raw_json)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn load_calibration_samples_by_source(
+        &self,
+        source: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<CalibrationSample>> {
+        let rows = if let Some(limit) = limit {
+            sqlx::query(
+                r#"
+                SELECT market_type, ts_utc, p_raw, label
+                FROM calibration_samples
+                WHERE source=?1
+                ORDER BY ts_utc ASC
+                LIMIT ?2
+                "#,
+            )
+            .bind(source)
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT market_type, ts_utc, p_raw, label
+                FROM calibration_samples
+                WHERE source=?1
+                ORDER BY ts_utc ASC
+                "#,
+            )
+            .bind(source)
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(CalibrationSample {
+                market_type: row.try_get("market_type")?,
+                ts_utc: row.try_get("ts_utc")?,
+                p_raw: row.try_get("p_raw")?,
+                label: row.try_get("label")?,
+            });
+        }
+        Ok(out)
+    }
+
+    pub async fn load_calibration_samples_all(&self) -> Result<Vec<CalibrationSample>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT market_type, ts_utc, p_raw, label
+            FROM calibration_samples
+            ORDER BY ts_utc ASC, id ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            out.push(CalibrationSample {
+                market_type: row.try_get("market_type")?,
+                ts_utc: row.try_get("ts_utc")?,
+                p_raw: row.try_get("p_raw")?,
+                label: row.try_get("label")?,
+            });
+        }
+        Ok(out)
     }
 
     pub async fn replace_calibration_samples(&self, rows: &[CalibrationSample]) -> Result<()> {

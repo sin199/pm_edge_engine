@@ -5,3 +5,8 @@
 *.db-wal
 fair_probs.json
 orders.json
+src/*.bak
+src/*.bak.*
+*.cleanbak
+pm_edge_engine.db.bak.*
+football_edge_*.json

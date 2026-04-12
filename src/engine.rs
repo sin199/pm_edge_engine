@@ -1,6 +1,6 @@
 use crate::config::AppConfig;
 use crate::types::{DecisionRecord, EvaluatedMarket, Order, OrdersOutput};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
 pub fn generate_orders(
@@ -8,6 +8,22 @@ pub fn generate_orders(
     cfg: &AppConfig,
     equity_usd: f64,
     realized_daily_loss_usd: f64,
+) -> (OrdersOutput, Vec<DecisionRecord>) {
+    generate_orders_at(
+        evaluated,
+        cfg,
+        equity_usd,
+        realized_daily_loss_usd,
+        Utc::now(),
+    )
+}
+
+pub fn generate_orders_at(
+    evaluated: &[EvaluatedMarket],
+    cfg: &AppConfig,
+    equity_usd: f64,
+    realized_daily_loss_usd: f64,
+    evaluation_ts: DateTime<Utc>,
 ) -> (OrdersOutput, Vec<DecisionRecord>) {
     let mut orders = Vec::new();
     let mut decisions = Vec::new();
@@ -18,15 +34,43 @@ pub fn generate_orders(
 
     for e in evaluated {
         let mut reason_codes = e.reason_codes.clone();
+        let mut blocking_reason_codes = e
+            .reason_codes
+            .iter()
+            .filter(|code| !is_informational_reason_code(code))
+            .cloned()
+            .collect::<Vec<_>>();
+        let outcome_count = e.implied_probs.len().min(e.fair_probs.len()).max(1);
+        let mut best_idx = 0usize;
+        let mut best_edge = f64::NEG_INFINITY;
+        for i in 0..outcome_count {
+            let implied_i = e
+                .implied_probs
+                .get(i)
+                .copied()
+                .unwrap_or(0.5)
+                .clamp(0.0001, 0.9999);
+            let fair_i = e
+                .fair_probs
+                .get(i)
+                .copied()
+                .unwrap_or(0.5)
+                .clamp(0.0001, 0.9999);
+            let edge_i = fair_i - implied_i;
+            if edge_i > best_edge {
+                best_edge = edge_i;
+                best_idx = i;
+            }
+        }
         let implied0 = e
             .implied_probs
-            .first()
+            .get(best_idx)
             .copied()
             .unwrap_or(0.5)
             .clamp(0.0001, 0.9999);
         let fair0 = e
             .fair_probs
-            .first()
+            .get(best_idx)
             .copied()
             .unwrap_or(0.5)
             .clamp(0.0001, 0.9999);
@@ -51,41 +95,74 @@ pub fn generate_orders(
         let mut size_fraction = 0.0;
 
         if !e.market.active || e.market.closed || !e.market.accepting_orders {
-            reason_codes.push("MARKET_STATE_INVALID".to_string());
+            push_reason_code(
+                &mut reason_codes,
+                &mut blocking_reason_codes,
+                "MARKET_STATE_INVALID",
+            );
         }
 
         if e.match_confidence < cfg.model.min_match_confidence {
-            reason_codes.push("LOW_MATCH_CONFIDENCE".to_string());
+            push_reason_code(
+                &mut reason_codes,
+                &mut blocking_reason_codes,
+                "LOW_MATCH_CONFIDENCE",
+            );
         }
 
         if e.confidence < cfg.engine.min_confidence {
-            reason_codes.push("LOW_MODEL_CONFIDENCE".to_string());
+            push_reason_code(
+                &mut reason_codes,
+                &mut blocking_reason_codes,
+                "LOW_MODEL_CONFIDENCE",
+            );
         }
 
         if liquidity < cfg.engine.min_liquidity_usd {
-            reason_codes.push("LOW_LIQUIDITY".to_string());
+            push_reason_code(
+                &mut reason_codes,
+                &mut blocking_reason_codes,
+                "LOW_LIQUIDITY",
+            );
         }
-        if spread > cfg.engine.max_spread {
-            reason_codes.push("WIDE_SPREAD".to_string());
+        if spread > cfg.engine.max_spread + 1e-9 {
+            push_reason_code(&mut reason_codes, &mut blocking_reason_codes, "WIDE_SPREAD");
         }
         if vol_5m < cfg.engine.min_volume_5m {
-            reason_codes.push("LOW_5M_VOLUME".to_string());
+            push_reason_code(
+                &mut reason_codes,
+                &mut blocking_reason_codes,
+                "LOW_5M_VOLUME",
+            );
         }
 
-        if let Some(start) = e.market.start_time_utc {
-            let mins = (start - Utc::now()).num_minutes();
-            if mins < 5 {
-                reason_codes.push("NEAR_RESOLUTION_LT5M".to_string());
-            } else if mins < cfg.engine.min_time_to_event_minutes {
-                reason_codes.push("NEAR_EVENT".to_string());
+        let time_to_event_minutes = e.market.time_to_settlement_minutes.or_else(|| {
+            e.market
+                .start_time_utc
+                .map(|start| (start - evaluation_ts).num_minutes() as f64)
+        });
+
+        if let Some(mins) = time_to_event_minutes {
+            if mins < 5.0 {
+                push_reason_code(
+                    &mut reason_codes,
+                    &mut blocking_reason_codes,
+                    "NEAR_RESOLUTION_LT5M",
+                );
+            } else if mins < cfg.engine.min_time_to_event_minutes as f64 {
+                push_reason_code(&mut reason_codes, &mut blocking_reason_codes, "NEAR_EVENT");
             }
         }
 
         if edge0 < min_edge_dynamic + cfg.engine.cost_buffer {
-            reason_codes.push("EDGE_BELOW_THRESHOLD".to_string());
+            push_reason_code(
+                &mut reason_codes,
+                &mut blocking_reason_codes,
+                "EDGE_BELOW_THRESHOLD",
+            );
         }
 
-        if reason_codes.is_empty() {
+        if blocking_reason_codes.is_empty() {
             let kelly = binary_kelly_fraction(fair0, implied0).max(0.0);
             let mut frac = cfg.engine.fractional_kelly * kelly;
 
@@ -116,7 +193,7 @@ pub fn generate_orders(
                     orders.push(Order {
                         market_slug: e.market.market_slug.clone(),
                         side: "BUY".to_string(),
-                        outcome_index: 0,
+                        outcome_index: best_idx,
                         limit_price,
                         size_usd: (size_usd * 100.0).round() / 100.0,
                         order_type: "maker".to_string(),
@@ -126,10 +203,18 @@ pub fn generate_orders(
                     used_daily_risk += frac;
                     *per_match_used.entry(match_key).or_insert(0.0) += frac;
                 } else {
-                    reason_codes.push("SIZE_BELOW_1_USD".to_string());
+                    push_reason_code(
+                        &mut reason_codes,
+                        &mut blocking_reason_codes,
+                        "SIZE_BELOW_1_USD",
+                    );
                 }
             } else {
-                reason_codes.push("RISK_BUDGET_EXHAUSTED".to_string());
+                push_reason_code(
+                    &mut reason_codes,
+                    &mut blocking_reason_codes,
+                    "RISK_BUDGET_EXHAUSTED",
+                );
             }
         }
 
@@ -144,7 +229,7 @@ pub fn generate_orders(
 
         decisions.push(DecisionRecord {
             market_slug: e.market.market_slug.clone(),
-            timestamp_utc: Utc::now().to_rfc3339(),
+            timestamp_utc: evaluation_ts.to_rfc3339(),
             implied_probs: e.implied_probs.clone(),
             fair_probs: e.fair_probs.clone(),
             edge: e.edge.clone(),
@@ -159,6 +244,25 @@ pub fn generate_orders(
     (OrdersOutput { orders }, decisions)
 }
 
+fn is_informational_reason_code(code: &str) -> bool {
+    matches!(
+        code,
+        "POISSON_DISABLED_LOW_DATA"
+            | "REMOTE_MATCH_LOOKUP"
+            | "ODDS_FUSION_USED"
+            | "CALIBRATED_BINARY_YES_FALLBACK"
+    )
+}
+
+fn push_reason_code(all_reasons: &mut Vec<String>, blocking_reasons: &mut Vec<String>, code: &str) {
+    if !all_reasons.iter().any(|existing| existing == code) {
+        all_reasons.push(code.to_string());
+    }
+    if !blocking_reasons.iter().any(|existing| existing == code) {
+        blocking_reasons.push(code.to_string());
+    }
+}
+
 fn binary_kelly_fraction(fair_prob: f64, price: f64) -> f64 {
     let p = fair_prob.clamp(0.0001, 0.9999);
     let pr = price.clamp(0.0001, 0.9999);
@@ -170,10 +274,10 @@ fn binary_kelly_fraction(fair_prob: f64, price: f64) -> f64 {
 }
 
 fn effective_spread(e: &EvaluatedMarket) -> f64 {
-    if let (Some(b), Some(a)) = (e.market.best_bid, e.market.best_ask) {
-        if a >= b {
-            return (a - b).clamp(0.0, 1.0);
-        }
+    if let (Some(b), Some(a)) = (e.market.best_bid, e.market.best_ask)
+        && a >= b
+    {
+        return (a - b).clamp(0.0, 1.0);
     }
     e.market.spread.unwrap_or(0.02).clamp(0.0, 1.0)
 }
@@ -198,6 +302,7 @@ mod tests {
             volume: 20_000.0,
             volume_5m: Some(1_500.0),
             start_time_utc: Some(Utc::now() + Duration::minutes(60)),
+            time_to_settlement_minutes: None,
             event_title: Some("Team A vs Team B".to_string()),
             event_slug: Some("team-a-vs-team-b".to_string()),
             event_home_team: Some("Team A".to_string()),
@@ -254,6 +359,66 @@ mod tests {
                 .reason_codes
                 .iter()
                 .any(|code| code == "MARKET_STATE_INVALID")
+        );
+    }
+
+    #[test]
+    fn informational_reason_codes_do_not_block_buy() {
+        let cfg = AppConfig::default();
+        let mut eval = sample_eval();
+        eval.reason_codes = vec![
+            "POISSON_DISABLED_LOW_DATA".to_string(),
+            "REMOTE_MATCH_LOOKUP".to_string(),
+        ];
+
+        let (orders, decisions) = generate_orders(&[eval], &cfg, 1_000.0, 0.0);
+
+        assert_eq!(orders.orders.len(), 1);
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0].decision, "BUY");
+        assert!(
+            decisions[0]
+                .reason_codes
+                .iter()
+                .any(|code| code == "POISSON_DISABLED_LOW_DATA")
+        );
+        assert!(
+            decisions[0]
+                .reason_codes
+                .iter()
+                .any(|code| code == "REMOTE_MATCH_LOOKUP")
+        );
+    }
+
+    #[test]
+    fn chooses_best_positive_outcome_when_first_outcome_is_negative() {
+        let cfg = AppConfig::default();
+        let mut eval = sample_eval();
+        eval.implied_probs = vec![0.40, 0.60];
+        eval.fair_probs = vec![0.30, 0.70];
+        eval.edge = vec![-0.10, 0.10];
+
+        let (orders, decisions) = generate_orders(&[eval], &cfg, 1_000.0, 0.0);
+
+        assert_eq!(orders.orders.len(), 1);
+        assert_eq!(orders.orders[0].outcome_index, 1);
+        assert_eq!(decisions[0].decision, "BUY");
+    }
+
+    #[test]
+    fn spread_equal_to_max_threshold_does_not_block_buy() {
+        let cfg = AppConfig::default();
+        let eval = sample_eval();
+
+        let (orders, decisions) = generate_orders(&[eval], &cfg, 1_000.0, 0.0);
+
+        assert_eq!(orders.orders.len(), 1);
+        assert_eq!(decisions[0].decision, "BUY");
+        assert!(
+            !decisions[0]
+                .reason_codes
+                .iter()
+                .any(|code| code == "WIDE_SPREAD")
         );
     }
 }

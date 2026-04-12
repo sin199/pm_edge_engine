@@ -1,9 +1,9 @@
-#![allow(dead_code)]
+#![allow(clippy::needless_range_loop)]
 #![allow(dead_code)]
 
 use crate::config::ModelConfig;
 use crate::types::{MatchRecord, OneXTwoProbs, PoissonPersisted};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -149,6 +149,14 @@ pub fn train_by_league(
     matches: &[MatchRecord],
     cfg: &ModelConfig,
 ) -> HashMap<String, LeaguePoissonModel> {
+    train_by_league_at(matches, cfg, Utc::now())
+}
+
+pub fn train_by_league_at(
+    matches: &[MatchRecord],
+    cfg: &ModelConfig,
+    reference_time: DateTime<Utc>,
+) -> HashMap<String, LeaguePoissonModel> {
     let mut grouped: HashMap<String, Vec<&MatchRecord>> = HashMap::new();
     for m in matches.iter().filter(|x| x.has_result()) {
         grouped.entry(m.league.clone()).or_default().push(m);
@@ -156,13 +164,18 @@ pub fn train_by_league(
 
     let mut out = HashMap::new();
     for (league, rows) in grouped {
-        let model = train_league(&league, &rows, cfg);
+        let model = train_league(&league, &rows, cfg, reference_time);
         out.insert(league, model);
     }
     out
 }
 
-fn train_league(league: &str, matches: &[&MatchRecord], cfg: &ModelConfig) -> LeaguePoissonModel {
+fn train_league(
+    league: &str,
+    matches: &[&MatchRecord],
+    cfg: &ModelConfig,
+    reference_time: DateTime<Utc>,
+) -> LeaguePoissonModel {
     let sample_size = matches.len();
     let mut teams = Vec::<String>::new();
     for m in matches {
@@ -206,7 +219,6 @@ fn train_league(league: &str, matches: &[&MatchRecord], cfg: &ModelConfig) -> Le
         cfg.poisson_l2
     };
 
-    let now = Utc::now();
     let mut samples = Vec::with_capacity(sample_size);
     for m in matches {
         let Some(&hi) = team_idx.get(&m.home_team) else {
@@ -215,7 +227,7 @@ fn train_league(league: &str, matches: &[&MatchRecord], cfg: &ModelConfig) -> Le
         let Some(&ai) = team_idx.get(&m.away_team) else {
             continue;
         };
-        let days_ago = (now - m.datetime_utc).num_days().max(0) as f64;
+        let days_ago = (reference_time - m.datetime_utc).num_days().max(0) as f64;
         let weight = 0.5_f64.powf(days_ago / 365.0);
         samples.push(TrainSample {
             home_idx: hi,

@@ -1,0 +1,22 @@
+{
+  "tail_window": {
+    "min_minutes_to_start": 5,
+    "max_minutes_to_start": 15,
+    "require_start_time": true
+  },
+  "overrides": {
+    "engine": {
+      "min_time_to_event_minutes": 0
+    }
+  },
+  "matches_files": [
+    "backtest_tail_515_batch/matches.json"
+  ],
+  "odds_files": [
+    "backtest_tail_515_batch/odds.json"
+  ],
+  "snapshot_files": [
+    "backtest_tail_515_batch/2026-02-18T17-55-00Z.json",
+    "backtest_tail_515_batch/2026-02-18T22-00-00Z.json"
+  ]
+}

@@ -6,3 +6,6 @@ contact_links:
   - name: Examples and sample payloads
     url: https://github.com/sin199/pm_edge_engine/blob/main/examples/README.md
     about: Check the example inputs and outputs before opening a support-style issue.
+  - name: Mapping-miss guide
+    url: https://github.com/sin199/pm_edge_engine/blob/main/docs/MAPPING_MISS_REPORT.md
+    about: Use this when a market should map to a fixture but does not yet.

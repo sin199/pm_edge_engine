@@ -1,5 +1,4 @@
 #![allow(dead_code)]
-#![allow(dead_code)]
 
 use crate::storage::{CalibrationSample, CalibratorRow};
 use anyhow::{Context, Result};
@@ -31,6 +30,7 @@ pub struct Calibrator {
 #[derive(Debug, Clone, Default)]
 pub struct CalibrationRegistry {
     by_type: HashMap<String, Calibrator>,
+    aliases: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -46,20 +46,51 @@ pub struct CalibrationMetrics {
 impl CalibrationRegistry {
     pub fn from_rows(rows: &[CalibratorRow]) -> Self {
         let mut by_type = HashMap::new();
+        let mut aliases = HashMap::new();
         for row in rows {
             let parsed: Result<Calibrator, _> = serde_json::from_str(&row.blob_json);
             if let Ok(c) = parsed {
+                for alias in alias_keys(&row.market_type) {
+                    aliases.insert(alias.to_string(), row.market_type.clone());
+                }
                 by_type.insert(row.market_type.clone(), c);
             }
         }
-        Self { by_type }
+        Self { by_type, aliases }
     }
 
     pub fn apply(&self, market_type: &str, p: f64) -> f64 {
-        let Some(c) = self.by_type.get(market_type) else {
+        let resolved = self
+            .aliases
+            .get(market_type)
+            .map(|s| s.as_str())
+            .unwrap_or(market_type);
+        let Some(c) = self.by_type.get(resolved) else {
             return p.clamp(0.0, 1.0);
         };
         apply_model(&c.model, p)
+    }
+
+    pub fn has(&self, market_type: &str) -> bool {
+        let resolved = self
+            .aliases
+            .get(market_type)
+            .map(|s| s.as_str())
+            .unwrap_or(market_type);
+        self.by_type.contains_key(resolved)
+    }
+
+    pub fn span(&self, market_type: &str) -> Option<f64> {
+        if !self.has(market_type) {
+            return None;
+        }
+        let low = self.apply(market_type, 0.25);
+        let high = self.apply(market_type, 0.75);
+        Some((high - low).abs())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_type.is_empty()
     }
 
     pub fn rows_for_upsert(&self) -> Result<Vec<CalibratorRow>> {
@@ -76,7 +107,20 @@ impl CalibrationRegistry {
     }
 
     pub fn insert(&mut self, c: Calibrator) {
+        for alias in alias_keys(&c.market_type) {
+            self.aliases
+                .insert(alias.to_string(), c.market_type.clone());
+        }
         self.by_type.insert(c.market_type.clone(), c);
+    }
+}
+
+fn alias_keys(market_type: &str) -> &'static [&'static str] {
+    match market_type {
+        "match_odds_1x2" => &["oneXtwo_home", "oneXtwo_draw", "oneXtwo_away"],
+        "totals_over_under" => &["totals_over"],
+        "asian_handicap" => &["spread_cover"],
+        _ => &[],
     }
 }
 
@@ -259,5 +303,49 @@ fn apply_model(model: &CalibratorModel, p: f64) -> f64 {
             }
             values.last().copied().unwrap_or(p).clamp(0.0001, 0.9999)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_runtime_aliases_to_canonical_market_types() {
+        let row = CalibratorRow {
+            market_type: "match_odds_1x2".to_string(),
+            method: "platt".to_string(),
+            blob_json: serde_json::to_string(&Calibrator {
+                market_type: "match_odds_1x2".to_string(),
+                method: "platt".to_string(),
+                model: CalibratorModel::Platt { a: 0.0, b: 2.0 },
+            })
+            .unwrap(),
+            updated_at: "2026-04-11T00:00:00Z".to_string(),
+        };
+
+        let reg = CalibrationRegistry::from_rows(&[row]);
+        let direct = reg.apply("match_odds_1x2", 0.40);
+        let alias = reg.apply("oneXtwo_home", 0.40);
+        assert!((direct - alias).abs() < 1e-12);
+    }
+
+    #[test]
+    fn resolves_fresh_paper_binary_alias() {
+        let row = CalibratorRow {
+            market_type: "binary_yes".to_string(),
+            method: "platt".to_string(),
+            blob_json: serde_json::to_string(&Calibrator {
+                market_type: "binary_yes".to_string(),
+                method: "platt".to_string(),
+                model: CalibratorModel::Platt { a: -1.0, b: 3.0 },
+            })
+            .unwrap(),
+            updated_at: "2026-04-11T00:00:00Z".to_string(),
+        };
+
+        let reg = CalibrationRegistry::from_rows(&[row]);
+        let out = reg.apply("binary_yes", 0.40);
+        assert!(out > 0.0 && out < 1.0);
     }
 }

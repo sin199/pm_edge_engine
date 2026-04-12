@@ -3,13 +3,13 @@
 use crate::config::GammaConfig;
 use crate::types::MarketRecord;
 use anyhow::{Context, Result, anyhow};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::time::{Duration, sleep};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct GammaEvent {
     #[serde(default)]
     slug: Option<String>,
@@ -20,6 +20,10 @@ struct GammaEvent {
     #[serde(default)]
     startDate: Option<String>,
     #[serde(default)]
+    endDate: Option<String>,
+    #[serde(default)]
+    end_date: Option<String>,
+    #[serde(default)]
     series_slug: Option<String>,
     #[serde(default)]
     tags: Option<Vec<GammaTag>>,
@@ -29,13 +33,13 @@ struct GammaEvent {
     away_team: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct GammaTag {
     #[serde(default)]
     slug: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct GammaMarket {
     #[serde(default)]
     slug: Option<String>,
@@ -69,6 +73,10 @@ struct GammaMarket {
     #[serde(default)]
     start_date: Option<String>,
     #[serde(default)]
+    endDate: Option<String>,
+    #[serde(default)]
+    end_date: Option<String>,
+    #[serde(default)]
     acceptingOrders: Option<bool>,
     #[serde(default)]
     closed: Option<bool>,
@@ -77,6 +85,14 @@ struct GammaMarket {
 
     #[serde(default)]
     events: Option<Vec<GammaEvent>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GammaEventPage {
+    #[serde(flatten)]
+    event: GammaEvent,
+    #[serde(default)]
+    markets: Option<Vec<GammaMarket>>,
 }
 
 pub struct GammaClient {
@@ -90,10 +106,67 @@ impl GammaClient {
     }
 
     pub async fn fetch_markets(&self) -> Result<Vec<MarketRecord>> {
+        let mut out = Vec::new();
+        let now = Utc::now();
+        let near_term_window_end = now + ChronoDuration::hours(120);
+
+        if self.cfg.sports_only {
+            let mut seen = std::collections::HashSet::new();
+            for tag_id in soccer_game_tag_ids() {
+                let mut offset = 0usize;
+                let mut page = 0usize;
+                while page < self.cfg.max_pages {
+                    let mut url = format!(
+                        "{}/events?limit={}&offset={}&active=true&closed=false&tag_id={}&related_tags=true",
+                        self.cfg.base_url, self.cfg.page_limit, offset, tag_id
+                    );
+                    url.push_str("&end_date_min=");
+                    url.push_str(&urlencoding::encode(&now.to_rfc3339()));
+                    url.push_str("&end_date_max=");
+                    url.push_str(&urlencoding::encode(&near_term_window_end.to_rfc3339()));
+                    url.push_str("&order=end_date&ascending=true");
+
+                    let page_rows: Vec<GammaEventPage> = self.get_retry(&url).await?;
+                    if page_rows.is_empty() {
+                        break;
+                    }
+
+                    for event_page in page_rows {
+                        let event = event_page.event;
+                        let event_tag = make_event_tag(&event);
+                        if let Some(markets) = event_page.markets {
+                            for mut row in markets {
+                                if row.events.is_none() {
+                                    row.events = Some(vec![event_tag.clone()]);
+                                }
+                                if !is_near_term_market(&row, now, near_term_window_end) {
+                                    continue;
+                                }
+                                if self.cfg.sports_only && !is_footballish_market(&row) {
+                                    continue;
+                                }
+                                if let Some(m) = gamma_to_market(row)
+                                    && seen.insert(m.market_slug.clone())
+                                {
+                                    out.push(m);
+                                }
+                            }
+                        }
+                    }
+
+                    if out.len() >= self.cfg.page_limit * self.cfg.max_pages {
+                        break;
+                    }
+
+                    offset += self.cfg.page_limit;
+                    page += 1;
+                }
+            }
+            return Ok(out);
+        }
+
         let mut offset = 0usize;
         let mut page = 0usize;
-        let mut out = Vec::new();
-
         while page < self.cfg.max_pages {
             let mut url = format!(
                 "{}/markets?limit={}&offset={}",
@@ -102,10 +175,6 @@ impl GammaClient {
             if self.cfg.only_active {
                 url.push_str("&active=true&closed=false");
             }
-            if self.cfg.sports_only {
-                url.push_str("&tag_slug=sports");
-            }
-
             let page_rows: Vec<GammaMarket> = self.get_retry(&url).await?;
             if page_rows.is_empty() {
                 break;
@@ -203,14 +272,14 @@ fn gamma_to_market(g: GammaMarket) -> Option<MarketRecord> {
 
     let best_bid = parse_opt_f64(g.bestBid.as_ref());
     let best_ask = parse_opt_f64(g.bestAsk.as_ref());
-    let spread =
-        g.spread
-            .as_ref()
-            .and_then(parse_value_f64)
-            .or_else(|| match (best_bid, best_ask) {
-                (Some(b), Some(a)) if a >= b => Some(a - b),
-                _ => None,
-            });
+    let spread = g
+        .spread
+        .as_ref()
+        .and_then(parse_value_f64)
+        .or(match (best_bid, best_ask) {
+            (Some(b), Some(a)) if a >= b => Some(a - b),
+            _ => None,
+        });
 
     let mut event_title = None;
     let mut event_slug = None;
@@ -218,26 +287,38 @@ fn gamma_to_market(g: GammaMarket) -> Option<MarketRecord> {
     let mut event_away_team = None;
     let mut league_hint = None;
     let mut start_time_utc = parse_datetime(g.startDate.as_ref().or(g.start_date.as_ref()));
+    let mut end_time_utc = parse_datetime(g.endDate.as_ref().or(g.end_date.as_ref()));
 
-    if let Some(events) = g.events {
-        if let Some(e) = events.first() {
-            event_title = e.title.clone();
-            event_slug = e.slug.clone();
-            event_home_team = e.home_team.clone();
-            event_away_team = e.away_team.clone();
-            if start_time_utc.is_none() {
-                start_time_utc = parse_datetime(e.startDate.as_ref().or(e.start_date.as_ref()));
-            }
-            if let Some(tags) = &e.tags {
-                league_hint = tags
-                    .iter()
-                    .filter_map(|x| x.slug.clone())
-                    .find(|x| x != "sports");
-            }
-            if league_hint.is_none() {
-                league_hint = e.series_slug.clone();
-            }
+    if let Some(events) = g.events
+        && let Some(e) = events.first()
+    {
+        event_title = e.title.clone();
+        event_slug = e.slug.clone();
+        event_home_team = e.home_team.clone();
+        event_away_team = e.away_team.clone();
+        if start_time_utc.is_none() {
+            start_time_utc = parse_datetime(e.startDate.as_ref().or(e.start_date.as_ref()));
         }
+        if end_time_utc.is_none() {
+            end_time_utc = parse_datetime(e.endDate.as_ref().or(e.end_date.as_ref()));
+        }
+        if let Some(tags) = &e.tags {
+            league_hint = tags
+                .iter()
+                .filter_map(|x| x.slug.clone())
+                .find(|x| x != "sports");
+        }
+        if league_hint.is_none() {
+            league_hint = e.series_slug.clone();
+        }
+    }
+
+    if league_hint.as_deref() == Some("games")
+        && event_home_team.is_some()
+        && event_away_team.is_some()
+        && end_time_utc.is_some()
+    {
+        start_time_utc = end_time_utc;
     }
 
     Some(MarketRecord {
@@ -252,6 +333,7 @@ fn gamma_to_market(g: GammaMarket) -> Option<MarketRecord> {
         volume: parse_opt_f64(g.volume.as_ref().or(g.volumeNum.as_ref())).unwrap_or(0.0),
         volume_5m: parse_opt_f64(g.volume_5m.as_ref()),
         start_time_utc,
+        time_to_settlement_minutes: end_time_utc.map(|end| (end - Utc::now()).num_minutes() as f64),
         event_title,
         event_slug,
         event_home_team,
@@ -261,6 +343,34 @@ fn gamma_to_market(g: GammaMarket) -> Option<MarketRecord> {
         closed: g.closed.unwrap_or(false),
         accepting_orders: g.acceptingOrders.unwrap_or(true),
     })
+}
+
+fn make_event_tag(event: &GammaEvent) -> GammaEvent {
+    event.clone()
+}
+
+fn is_near_term_market(
+    g: &GammaMarket,
+    now: DateTime<Utc>,
+    near_term_window_end: DateTime<Utc>,
+) -> bool {
+    let end_time = parse_datetime(g.endDate.as_ref().or(g.end_date.as_ref())).or_else(|| {
+        g.events.as_ref().and_then(|events| {
+            events
+                .first()
+                .and_then(|e| parse_datetime(e.endDate.as_ref().or(e.end_date.as_ref())))
+        })
+    });
+
+    let Some(end_time) = end_time else {
+        return false;
+    };
+
+    end_time >= now && end_time <= near_term_window_end
+}
+
+fn soccer_game_tag_ids() -> &'static [i64] {
+    &[82, 780, 1494, 102070, 101962, 100977]
 }
 
 fn parse_datetime(raw: Option<&String>) -> Option<DateTime<Utc>> {
@@ -359,6 +469,56 @@ fn normalize_probabilities(p: &mut [f64]) {
             *x /= sum2;
         }
     }
+}
+
+fn is_footballish_market(g: &GammaMarket) -> bool {
+    let mut text = String::new();
+    if let Some(q) = g.question.as_deref() {
+        text.push_str(q);
+        text.push(' ');
+    }
+    if let Some(slug) = g.slug.as_deref() {
+        text.push_str(slug);
+        text.push(' ');
+    }
+    if let Some(events) = g.events.as_ref() {
+        for e in events.iter().take(2) {
+            if let Some(title) = e.title.as_deref() {
+                text.push_str(title);
+                text.push(' ');
+            }
+            if let Some(slug) = e.slug.as_deref() {
+                text.push_str(slug);
+                text.push(' ');
+            }
+            if let Some(home) = e.home_team.as_deref() {
+                text.push_str(home);
+                text.push(' ');
+            }
+            if let Some(away) = e.away_team.as_deref() {
+                text.push_str(away);
+                text.push(' ');
+            }
+            if let Some(series) = e.series_slug.as_deref() {
+                text.push_str(series);
+                text.push(' ');
+            }
+        }
+    }
+    let text = text.to_lowercase();
+    const KEYWORDS: &[&str] = &[
+        "soccer",
+        "football",
+        "premier league",
+        "champions league",
+        "la liga",
+        "serie a",
+        "world cup",
+        "fifa",
+        "uefa",
+        "epl",
+    ];
+    KEYWORDS.iter().any(|kw| text.contains(kw))
 }
 
 fn truncate(s: &str, max: usize) -> String {

@@ -49,3 +49,13 @@ Useful bug reports include:
 - Example input payloads
 - Expected vs actual output
 - Relevant logs or error messages
+
+For market mapping misses, include:
+
+- Market slug
+- Exact market question
+- Expected sporting fixture
+- Start time in UTC, if known
+- Raw JSON payload or CLI output
+- Whether the miss was wording, timing, team-name normalization, unsupported shape, or league coverage
+- If possible, run `cargo run -- diagnose --markets_file <file> --issue-body` and paste the Markdown report; otherwise attach the raw JSON diagnostics

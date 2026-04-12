@@ -1,0 +1,9 @@
+{
+  "matches_files": [
+    "backtest_batch/matches.json"
+  ],
+  "snapshot_files": [
+    "backtest_batch/2026-02-18T12-00-00Z.json",
+    "backtest_batch/2026-02-18T22-00-00Z.json"
+  ]
+}

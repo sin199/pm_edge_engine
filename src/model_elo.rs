@@ -1,6 +1,6 @@
 use crate::config::ModelConfig;
 use crate::types::{MatchRecord, OneXTwoProbs};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -10,8 +10,15 @@ pub struct EloModel {
 
 impl EloModel {
     pub fn train(matches: &[MatchRecord], cfg: &ModelConfig) -> Self {
+        Self::train_at(matches, cfg, Utc::now())
+    }
+
+    pub fn train_at(
+        matches: &[MatchRecord],
+        cfg: &ModelConfig,
+        reference_time: DateTime<Utc>,
+    ) -> Self {
         let mut ratings: HashMap<(String, String), f64> = HashMap::new();
-        let now = Utc::now();
 
         let mut sorted = matches
             .iter()
@@ -40,7 +47,7 @@ impl EloModel {
                 0.0
             };
 
-            let days_ago = (now - m.datetime_utc).num_days().max(0) as f64;
+            let days_ago = (reference_time - m.datetime_utc).num_days().max(0) as f64;
             let decay = 0.5_f64.powf(days_ago / cfg.half_life_days.max(1.0));
             let delta = cfg.elo_k * decay * (score_home - expected_home);
 

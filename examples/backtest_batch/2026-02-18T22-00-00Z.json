@@ -1,0 +1,26 @@
+{
+  "as_of_utc": "2026-02-18T22:00:00Z",
+  "markets": [
+    {
+      "market_slug": "fixture-teama-teamb-2026-02-18-home-win",
+      "question": "Will Team A win vs Team B?",
+      "outcomes": ["Yes", "No"],
+      "prices": [0.30, 0.70],
+      "best_bid": 0.29,
+      "best_ask": 0.31,
+      "spread": 0.02,
+      "liquidity": 10000.0,
+      "volume": 20000.0,
+      "volume_5m": 1500.0,
+      "start_time_utc": "2026-02-18T18:00:00Z",
+      "event_title": "Team A vs Team B",
+      "event_slug": "fixture-event",
+      "event_home_team": "Team A",
+      "event_away_team": "Team B",
+      "league_hint": "PL",
+      "active": true,
+      "closed": false,
+      "accepting_orders": true
+    }
+  ]
+}

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct AppConfig {
     pub database: DatabaseConfig,
     pub gamma: GammaConfig,
@@ -48,6 +49,8 @@ pub struct FootballConfig {
     pub retries: usize,
     pub public_fallback_enabled: bool,
     pub public_fallback_base_url: String,
+    pub sportsdb_lookup_enabled: bool,
+    pub sportsdb_lookup_base_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,21 +118,6 @@ pub struct CalibrationConfig {
     pub retrain_hours: u64,
 }
 
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            database: DatabaseConfig::default(),
-            gamma: GammaConfig::default(),
-            football: FootballConfig::default(),
-            model: ModelConfig::default(),
-            engine: EngineConfig::default(),
-            runtime: RuntimeConfig::default(),
-            odds: OddsConfig::default(),
-            calibration: CalibrationConfig::default(),
-        }
-    }
-}
-
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
@@ -172,6 +160,8 @@ impl Default for FootballConfig {
             retries: 5,
             public_fallback_enabled: true,
             public_fallback_base_url: "https://api.openligadb.de".to_string(),
+            sportsdb_lookup_enabled: true,
+            sportsdb_lookup_base_url: "https://www.thesportsdb.com/api/v1/json/123".to_string(),
         }
     }
 }
@@ -282,15 +272,19 @@ impl AppConfig {
             self.football.public_fallback_enabled =
                 matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on");
         }
-        if let Ok(v) = env::var("PM_EDGE_BASE_MIN_EDGE") {
-            if let Ok(x) = v.parse::<f64>() {
-                self.engine.base_min_edge = x;
-            }
+        if let Ok(v) = env::var("PM_EDGE_SPORTSDB_LOOKUP_ENABLED") {
+            self.football.sportsdb_lookup_enabled =
+                matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on");
         }
-        if let Ok(v) = env::var("PM_EDGE_MIN_MATCH_CONFIDENCE") {
-            if let Ok(x) = v.parse::<f64>() {
-                self.model.min_match_confidence = x;
-            }
+        if let Ok(v) = env::var("PM_EDGE_BASE_MIN_EDGE")
+            && let Ok(x) = v.parse::<f64>()
+        {
+            self.engine.base_min_edge = x;
+        }
+        if let Ok(v) = env::var("PM_EDGE_MIN_MATCH_CONFIDENCE")
+            && let Ok(x) = v.parse::<f64>()
+        {
+            self.model.min_match_confidence = x;
         }
         if let Ok(v) = env::var("PM_EDGE_ODDS_ENABLED") {
             self.odds.enabled =

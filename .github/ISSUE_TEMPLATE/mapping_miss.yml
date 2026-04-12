@@ -1,0 +1,70 @@
+name: Mapping miss report
+description: Report a market that should map to a fixture but does not yet
+title: "[Mapping miss] "
+labels:
+  - help wanted
+  - question
+  - examples
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a mapping miss. Please include the
+        exact market text and the fixture you expected so the failure can be
+        reproduced quickly.
+  - type: input
+    id: market_slug
+    attributes:
+      label: Market slug
+      description: Stable market slug or identifier from Polymarket
+      placeholder: e.g. ucl-fcb1-new-2026-03-18-fcb1
+    validations:
+      required: true
+  - type: textarea
+    id: market_question
+    attributes:
+      label: Market question
+      description: Exact wording of the market prompt or question
+      placeholder: Will FC Barcelona win on 2026-03-18?
+    validations:
+      required: true
+  - type: input
+    id: expected_fixture
+    attributes:
+      label: Expected fixture
+      description: The sporting fixture you expected the engine to map
+      placeholder: FC Barcelona vs Newcastle United FC
+    validations:
+      required: true
+  - type: dropdown
+    id: failure_type
+    attributes:
+      label: What failed
+      description: Which part of mapping failed?
+      options:
+        - Wording / prompt normalization
+        - Timing / kickoff alignment
+        - Team-name normalization
+        - Unsupported market shape
+        - League coverage gap
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: start_time_utc
+    attributes:
+      label: Start time UTC
+      description: If known, the market or fixture start time in UTC
+      placeholder: 2026-03-18T22:00:00Z
+  - type: textarea
+    id: payload
+    attributes:
+      label: Payload or logs
+      description: Paste the raw JSON market payload, CLI output, or relevant logs
+      render: shell
+  - type: textarea
+    id: context
+    attributes:
+      label: Extra context
+      description: Anything else that would help reproduce the miss
+      placeholder: Mention the release, commit, or dataset if relevant.

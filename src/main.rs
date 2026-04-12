@@ -1,7 +1,11 @@
+mod backtest;
 mod calibration;
 mod config;
+mod direct_historical_calibration;
 mod engine;
 mod football_data;
+mod fresh_paper_calibration;
+mod mapping_diagnostics;
 mod market_mapper;
 mod model_elo;
 mod model_hybrid;
@@ -9,14 +13,22 @@ mod model_poisson;
 mod odds_provider;
 mod openligadb;
 mod polymarket_gamma;
+mod shadow;
 mod storage;
+mod thesportsdb_lookup;
 mod types;
 
 use anyhow::{Context, Result};
-use chrono::{Duration, Utc};
+use backtest::{
+    TailManifestBuildOptions, build_tail_backtest_manifest, load_backtest_input, run_backtest,
+};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
 use clap::{Parser, Subcommand};
 use config::AppConfig;
+use direct_historical_calibration::calibrate_direct_historical;
 use football_data::FootballDataClient;
+use fresh_paper_calibration::calibrate_fresh_paper;
+use mapping_diagnostics::{build_mapping_diagnostics_output, render_mapping_issue_body};
 use market_mapper::{MapperContext, evaluate_markets};
 use model_elo::EloModel;
 use model_hybrid::combine_one_x_two;
@@ -26,10 +38,12 @@ use openligadb::OpenLigaDbClient;
 use polymarket_gamma::GammaClient;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use shadow::build_shadow_output;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use storage::{CalibrationSample, Storage};
+use storage::{CalibrationSample, CalibrationSampleRecord, Storage};
+use thesportsdb_lookup::TheSportsDbLookup;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 use types::{FairProbsOutput, MarketRecord, MatchRecord, PoissonPersisted};
@@ -48,6 +62,28 @@ enum Commands {
     Fetch,
     /// Train ELO/Poisson and optional calibration.
     Train,
+    /// Import completed fresh-paper samples into calibration tables and train the secondary calibrator.
+    CalibrateFreshPaper {
+        #[arg(long = "fresh_paper_root", alias = "fresh-paper-root")]
+        fresh_paper_root: String,
+        #[arg(
+            long = "replace_source",
+            alias = "replace-source",
+            default_value_t = true
+        )]
+        replace_source: bool,
+    },
+    /// Import completed direct-historical samples into calibration tables and train the secondary calibrator.
+    CalibrateDirectHistorical {
+        #[arg(long = "direct_historical_root", alias = "direct-historical-root")]
+        direct_historical_root: String,
+        #[arg(
+            long = "replace_source",
+            alias = "replace-source",
+            default_value_t = true
+        )]
+        replace_source: bool,
+    },
     /// Predict fair probabilities from input markets json.
     Predict {
         #[arg(long = "markets_file", alias = "markets-file")]
@@ -65,6 +101,56 @@ enum Commands {
             default_value_t = 0.0
         )]
         realized_daily_loss_usd: f64,
+    },
+    /// Produce a shadow-book JSON report for candidate orders and any resolvable settled outcomes.
+    Shadow {
+        #[arg(long = "markets_file", alias = "markets-file")]
+        markets_file: String,
+        #[arg(long = "equity_usd", alias = "equity-usd", default_value_t = 50.0)]
+        equity_usd: f64,
+        #[arg(
+            long = "realized_daily_loss_usd",
+            alias = "realized-daily-loss-usd",
+            default_value_t = 0.0
+        )]
+        realized_daily_loss_usd: f64,
+    },
+    /// Produce a machine-readable mapping diagnostics report for market mapping misses.
+    Diagnose {
+        #[arg(long = "markets_file", alias = "markets-file")]
+        markets_file: String,
+        #[arg(long = "issue_body", alias = "issue-body", default_value_t = false)]
+        issue_body: bool,
+    },
+    /// Replay dated market snapshots against time-anchored model state.
+    Backtest {
+        #[arg(long = "snapshots_file", alias = "snapshots-file")]
+        snapshots_file: String,
+        #[arg(long = "equity_usd", alias = "equity-usd", default_value_t = 100.0)]
+        equity_usd: f64,
+    },
+    /// Build a backtest manifest from archived sports-tail snapshot files.
+    TailManifest {
+        #[arg(long = "snapshots_dir", alias = "snapshots-dir")]
+        snapshots_dir: String,
+        #[arg(long = "manifest_out", alias = "manifest-out")]
+        manifest_out: String,
+        #[arg(long = "from_utc", alias = "from-utc")]
+        from_utc: Option<String>,
+        #[arg(long = "to_utc", alias = "to-utc")]
+        to_utc: Option<String>,
+        #[arg(
+            long = "min_minutes_to_start",
+            alias = "min-minutes-to-start",
+            default_value_t = 0
+        )]
+        min_minutes_to_start: i64,
+        #[arg(
+            long = "max_minutes_to_start",
+            alias = "max-minutes-to-start",
+            default_value_t = 30
+        )]
+        max_minutes_to_start: i64,
     },
     /// Run daemon scheduler (15m markets, 60m football+train).
     Run,
@@ -103,6 +189,42 @@ async fn main() -> Result<()> {
                 summary.leagues, summary.calibrators, summary.samples
             );
         }
+        Commands::CalibrateFreshPaper {
+            fresh_paper_root,
+            replace_source,
+        } => {
+            let summary =
+                calibrate_fresh_paper(&cfg, &storage, Path::new(&fresh_paper_root), replace_source)
+                    .await?;
+            info!(
+                "fresh-paper calibration imported={} skipped={} calibrators={} metrics={}",
+                summary.samples_imported,
+                summary.samples_skipped,
+                summary.calibrators_upserted,
+                summary.metrics_written
+            );
+            println!("{}", serde_json::to_string(&summary)?);
+        }
+        Commands::CalibrateDirectHistorical {
+            direct_historical_root,
+            replace_source,
+        } => {
+            let summary = calibrate_direct_historical(
+                &cfg,
+                &storage,
+                Path::new(&direct_historical_root),
+                replace_source,
+            )
+            .await?;
+            info!(
+                "direct-historical calibration imported={} skipped={} calibrators={} metrics={}",
+                summary.samples_imported,
+                summary.samples_skipped,
+                summary.calibrators_upserted,
+                summary.metrics_written
+            );
+            println!("{}", serde_json::to_string(&summary)?);
+        }
         Commands::Predict { markets_file } => {
             let markets = load_markets_input(&markets_file)?;
             let fair = predict_fair_probs(&cfg, &storage, &markets).await?;
@@ -120,6 +242,66 @@ async fn main() -> Result<()> {
                 engine::generate_orders(&evaluated, &cfg, equity_usd, realized_daily_loss_usd);
             let _ = decisions;
             println!("{}", serde_json::to_string(&orders)?);
+        }
+        Commands::Shadow {
+            markets_file,
+            equity_usd,
+            realized_daily_loss_usd,
+        } => {
+            let markets = load_markets_input(&markets_file)?;
+            let (fair, evaluated, _mapper_decisions) =
+                evaluate_for_candidates(&cfg, &storage, &markets).await?;
+            let (orders, decisions) =
+                engine::generate_orders(&evaluated, &cfg, equity_usd, realized_daily_loss_usd);
+            let shadow = build_shadow_output(fair, &evaluated, &decisions, orders);
+            println!("{}", serde_json::to_string(&shadow)?);
+        }
+        Commands::Diagnose {
+            markets_file,
+            issue_body,
+        } => {
+            let markets = load_markets_input(&markets_file)?;
+            let (_fair, evaluated, decisions) =
+                evaluate_for_candidates(&cfg, &storage, &markets).await?;
+            let diagnostics = build_mapping_diagnostics_output(&evaluated, &decisions);
+            if issue_body {
+                println!("{}", render_mapping_issue_body(&evaluated, &diagnostics));
+            } else {
+                println!("{}", serde_json::to_string(&diagnostics)?);
+            }
+        }
+        Commands::Backtest {
+            snapshots_file,
+            equity_usd,
+        } => {
+            let input = load_backtest_input(&snapshots_file)?;
+            let out = run_backtest(&cfg, &storage, input, equity_usd).await?;
+            println!("{}", serde_json::to_string(&out)?);
+        }
+        Commands::TailManifest {
+            snapshots_dir,
+            manifest_out,
+            from_utc,
+            to_utc,
+            min_minutes_to_start,
+            max_minutes_to_start,
+        } => {
+            let summary = build_tail_backtest_manifest(TailManifestBuildOptions {
+                snapshots_dir,
+                manifest_out,
+                from_utc: from_utc
+                    .as_deref()
+                    .map(|raw| parse_cli_utc_bound(raw, false))
+                    .transpose()?,
+                to_utc: to_utc
+                    .as_deref()
+                    .map(|raw| parse_cli_utc_bound(raw, true))
+                    .transpose()?,
+                min_minutes_to_start: Some(min_minutes_to_start),
+                max_minutes_to_start: Some(max_minutes_to_start),
+                require_start_time: true,
+            })?;
+            println!("{}", serde_json::to_string(&summary)?);
         }
         Commands::Run => {
             run_scheduler(cfg, storage, http).await?;
@@ -149,10 +331,10 @@ async fn run_scheduler(cfg: AppConfig, storage: Storage, http: Client) -> Result
     if let Err(e) = train_models(&cfg, &storage).await {
         warn!("initial train failed: {:#}", e);
     }
-    if cfg.runtime.predict_after_refresh {
-        if let Err(e) = refresh_outputs(&cfg, &storage).await {
-            warn!("initial predict/candidates failed: {:#}", e);
-        }
+    if cfg.runtime.predict_after_refresh
+        && let Err(e) = refresh_outputs(&cfg, &storage).await
+    {
+        warn!("initial predict/candidates failed: {:#}", e);
     }
 
     loop {
@@ -164,11 +346,10 @@ async fn run_scheduler(cfg: AppConfig, storage: Storage, http: Client) -> Result
             _ = market_tick.tick() => {
                 if let Err(e) = fetch_markets_only(&cfg, &storage, &http).await {
                     warn!("market refresh failed: {:#}", e);
-                } else if cfg.runtime.predict_after_refresh {
-                    if let Err(e) = refresh_outputs(&cfg, &storage).await {
+                } else if cfg.runtime.predict_after_refresh
+                    && let Err(e) = refresh_outputs(&cfg, &storage).await {
                         warn!("post-market predict failed: {:#}", e);
                     }
-                }
             }
             _ = football_tick.tick() => {
                 if let Err(e) = fetch_football_only(&cfg, &storage, &http).await {
@@ -177,11 +358,10 @@ async fn run_scheduler(cfg: AppConfig, storage: Storage, http: Client) -> Result
                 if let Err(e) = train_models(&cfg, &storage).await {
                     warn!("scheduled train failed: {:#}", e);
                 }
-                if cfg.runtime.predict_after_refresh {
-                    if let Err(e) = refresh_outputs(&cfg, &storage).await {
+                if cfg.runtime.predict_after_refresh
+                    && let Err(e) = refresh_outputs(&cfg, &storage).await {
                         warn!("post-train predict failed: {:#}", e);
                     }
-                }
             }
         }
     }
@@ -218,19 +398,39 @@ async fn fetch_all(cfg: &AppConfig, storage: &Storage, http: &Client) -> Result<
 async fn fetch_markets_only(cfg: &AppConfig, storage: &Storage, http: &Client) -> Result<usize> {
     let gamma = GammaClient::new(http.clone(), cfg.gamma.clone());
     let markets = gamma.fetch_markets().await?;
-    storage.upsert_markets(&markets).await?;
-    info!("gamma fetched markets={}", markets.len());
+    storage.replace_markets(&markets).await?;
+    info!("gamma fetched near_term_markets={}", markets.len());
     Ok(markets.len())
 }
 
 async fn fetch_football_only(cfg: &AppConfig, storage: &Storage, http: &Client) -> Result<usize> {
     if let Some(token) = cfg.football_token() {
         let fd = FootballDataClient::new(http.clone(), cfg.football.clone(), token);
-        let mut rows = fd.fetch_incremental().await?;
-        let hist = fd.fetch_historical().await.unwrap_or_default();
+        let mut rows = match fd.fetch_incremental().await {
+            Ok(rows) => rows,
+            Err(e) => {
+                warn!(
+                    "football-data incremental fetch failed, continuing without it: {:#}",
+                    e
+                );
+                Vec::new()
+            }
+        };
+        let hist = match fd.fetch_historical().await {
+            Ok(hist) => hist,
+            Err(e) => {
+                warn!(
+                    "football-data historical fetch failed, continuing without it: {:#}",
+                    e
+                );
+                Vec::new()
+            }
+        };
         rows.extend(hist);
         dedup_matches(&mut rows);
-        storage.upsert_matches(&rows).await?;
+        if !rows.is_empty() {
+            storage.upsert_matches(&rows).await?;
+        }
         info!("football-data fetched matches={}", rows.len());
         return Ok(rows.len());
     }
@@ -311,9 +511,14 @@ async fn train_models(cfg: &AppConfig, storage: &Storage) -> Result<TrainSummary
     };
 
     if cfg.calibration.enabled {
-        let samples = build_calibration_samples(cfg, &all_results, &elo, &poisson);
+        let core_samples = build_calibration_samples(cfg, &all_results, &elo, &poisson);
+        let core_records = build_core_calibration_records(&core_samples);
+        storage
+            .replace_calibration_samples_for_source("core_match_results", &core_records)
+            .await?;
+
+        let samples = storage.load_calibration_samples_all().await?;
         summary.samples = samples.len();
-        storage.replace_calibration_samples(&samples).await?;
 
         let (registry, metrics) =
             calibration::train_registry(&samples, &cfg.calibration.method, 80);
@@ -340,6 +545,54 @@ async fn train_models(cfg: &AppConfig, storage: &Storage) -> Result<TrainSummary
     }
 
     Ok(summary)
+}
+
+fn build_core_calibration_records(samples: &[CalibrationSample]) -> Vec<CalibrationSampleRecord> {
+    samples
+        .iter()
+        .enumerate()
+        .map(|(i, s)| CalibrationSampleRecord {
+            source: "core_match_results".to_string(),
+            source_cycle_id: "core_match_results".to_string(),
+            source_run_id: "train_models".to_string(),
+            source_path: "core_match_results".to_string(),
+            source_snapshot_id: None,
+            source_mode: Some("core_match_results".to_string()),
+            sample_id: format!("core:{}:{}", i, s.ts_utc),
+            trade_key: format!("core:{}:{}", i, s.ts_utc),
+            market_type: s.market_type.clone(),
+            market_slug: format!("core:{}:{}", s.market_type, i),
+            market_id: format!("core:{}:{}", s.market_type, i),
+            event_key: None,
+            event_id: None,
+            event_title: None,
+            market_sector: None,
+            market_family: None,
+            market_family_bucket: None,
+            outcome_index: None,
+            decision: None,
+            order_side: None,
+            ts_utc: s.ts_utc.clone(),
+            p_raw: s.p_raw,
+            label: s.label,
+            implied_prob: None,
+            fair_prob: None,
+            signal_price: None,
+            signal_bid: None,
+            signal_ask: None,
+            confidence: None,
+            edge: None,
+            effective_edge: None,
+            recommended_size_fraction: None,
+            allocation_rank: None,
+            filled: None,
+            resolved: None,
+            order_size_usdc: None,
+            realized_pnl_usdc: None,
+            slippage_bps: None,
+            raw_json: None,
+        })
+        .collect()
 }
 
 fn build_calibration_samples(
@@ -442,6 +695,20 @@ async fn evaluate_for_candidates(
     Vec<types::EvaluatedMarket>,
     Vec<types::DecisionRecord>,
 )> {
+    evaluate_for_candidates_at(cfg, storage, markets, Utc::now(), true).await
+}
+
+async fn evaluate_for_candidates_at(
+    cfg: &AppConfig,
+    storage: &Storage,
+    markets: &[MarketRecord],
+    reference_time: DateTime<Utc>,
+    allow_remote_lookup: bool,
+) -> Result<(
+    FairProbsOutput,
+    Vec<types::EvaluatedMarket>,
+    Vec<types::DecisionRecord>,
+)> {
     let elo_map = storage.load_elo_map().await?;
     let elo = EloModel::from_map(elo_map);
 
@@ -454,8 +721,17 @@ async fn evaluate_for_candidates(
     let calibrators = calibration::CalibrationRegistry::from_rows(&cal_rows);
 
     let odds = build_odds_provider(&cfg.odds);
+    let lookup_http = Client::builder()
+        .user_agent("pm_edge_engine/0.1.2")
+        .build()
+        .context("build thesportsdb client")?;
+    let sportsdb_lookup = if cfg.football.sportsdb_lookup_enabled {
+        Some(TheSportsDbLookup::new(lookup_http, cfg.football.clone()))
+    } else {
+        None
+    };
 
-    let window = build_match_window(markets);
+    let window = build_match_window_at(markets, reference_time);
     let matches = storage.load_matches_window(window.0, window.1).await?;
 
     let ctx = MapperContext {
@@ -464,15 +740,25 @@ async fn evaluate_for_candidates(
         poisson_models: &poisson_models,
         odds_provider: odds.as_ref(),
         calibrators: &calibrators,
+        match_lookup: if allow_remote_lookup {
+            sportsdb_lookup
+                .as_ref()
+                .map(|x| x as &dyn thesportsdb_lookup::MatchLookupProvider)
+        } else {
+            None
+        },
+        reference_time,
     };
 
     evaluate_markets(markets, &matches, &ctx).await
 }
 
-fn build_match_window(markets: &[MarketRecord]) -> (chrono::DateTime<Utc>, chrono::DateTime<Utc>) {
-    let now = Utc::now();
-    let mut min_t = now - Duration::days(2);
-    let mut max_t = now + Duration::days(3);
+fn build_match_window_at(
+    markets: &[MarketRecord],
+    reference_time: DateTime<Utc>,
+) -> (chrono::DateTime<Utc>, chrono::DateTime<Utc>) {
+    let mut min_t = reference_time - Duration::days(2);
+    let mut max_t = reference_time + Duration::days(3);
 
     for m in markets {
         if let Some(t) = m.start_time_utc {
@@ -524,6 +810,24 @@ fn dedup_matches(rows: &mut Vec<MatchRecord>) {
         }
     }
     *rows = dedup;
+}
+
+fn parse_cli_utc_bound(raw: &str, end_of_day: bool) -> Result<DateTime<Utc>> {
+    if let Ok(ts) = DateTime::parse_from_rfc3339(raw) {
+        return Ok(ts.with_timezone(&Utc));
+    }
+
+    if let Ok(date) = NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
+        let naive = if end_of_day {
+            date.and_hms_opt(23, 59, 59)
+        } else {
+            date.and_hms_opt(0, 0, 0)
+        }
+        .context("construct date boundary")?;
+        return Ok(DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc));
+    }
+
+    anyhow::bail!("invalid UTC bound {raw}; use RFC3339 or YYYY-MM-DD")
 }
 
 fn load_markets_input(path: &str) -> Result<Vec<MarketRecord>> {

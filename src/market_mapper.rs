@@ -1,9 +1,10 @@
 use crate::calibration::CalibrationRegistry;
 use crate::config::AppConfig;
 use crate::model_elo::EloModel;
-use crate::model_hybrid::{combine_binary_prob, combine_one_x_two};
+use crate::model_hybrid::{combine_binary_prob, combine_one_x_two_at, odds_blend_weights_at};
 use crate::model_poisson::LeaguePoissonModel;
 use crate::odds_provider::OddsProvider;
+use crate::thesportsdb_lookup::MatchLookupProvider;
 use crate::types::{
     DecisionRecord, EvaluatedMarket, FairProbResult, FairProbsOutput, MarketRecord, MarketType,
     MatchKey, MatchRecord, OneXTwoProbs,
@@ -19,6 +20,8 @@ pub struct MapperContext<'a> {
     pub poisson_models: &'a HashMap<String, LeaguePoissonModel>,
     pub odds_provider: &'a dyn OddsProvider,
     pub calibrators: &'a CalibrationRegistry,
+    pub match_lookup: Option<&'a dyn MatchLookupProvider>,
+    pub reference_time: DateTime<Utc>,
 }
 
 pub async fn evaluate_markets(
@@ -34,15 +37,46 @@ pub async fn evaluate_markets(
         let implied = normalize_probs_to_len(market.prices.clone(), market.outcomes.len());
         let mut reason_codes = Vec::new();
 
-        let best_match = pick_best_match(market, matches);
-        let (match_rec, match_confidence) = match best_match {
-            Some((m, conf)) => (Some(m.clone()), conf),
-            None => (None, 0.0),
+        let local_best =
+            pick_best_match(market, matches, ctx.reference_time).map(|(m, conf)| (m.clone(), conf));
+        let local_conf = local_best.as_ref().map(|(_, conf)| *conf).unwrap_or(0.0);
+        let remote_best = if local_conf < ctx.cfg.model.min_match_confidence {
+            if let Some(lookup) = ctx.match_lookup {
+                let remote_matches = lookup.find_matches(market).await.unwrap_or_default();
+                pick_best_match(market, &remote_matches, ctx.reference_time)
+                    .map(|(m, conf)| (m.clone(), conf))
+            } else {
+                None
+            }
+        } else {
+            None
         };
+
+        let mut match_rec = local_best.as_ref().map(|(m, _)| m.clone());
+        let mut match_confidence = local_conf;
+        if let Some((remote_match, remote_conf)) = remote_best
+            && remote_conf > match_confidence
+        {
+            reason_codes.push("REMOTE_MATCH_LOOKUP".to_string());
+            match_rec = Some(remote_match);
+            match_confidence = remote_conf;
+        }
 
         let market_type = classify_market_type(market, match_rec.as_ref());
         let mut fair_probs = vec![0.5; market.outcomes.len()];
         let confidence;
+        let binary_yes_span = ctx.calibrators.span("binary_yes").unwrap_or(0.0);
+        let generic_binary_yes = || {
+            combine_binary_prob(
+                implied.first().copied().unwrap_or(0.5),
+                None,
+                false,
+                "binary_yes",
+                &ctx.cfg.model,
+                &ctx.cfg.calibration,
+                ctx.calibrators,
+            )
+        };
 
         if let Some(mrec) = &match_rec {
             let elo_1x2 = ctx.elo_model.predict_one_x_two(
@@ -69,7 +103,10 @@ pub async fn evaluate_markets(
                 datetime_utc: mrec.datetime_utc,
             };
             let odds = ctx.odds_provider.fetch_odds(&key).await.ok().flatten();
-            let hybrid_1x2 = combine_one_x_two(
+            if odds_blend_weights_at(poisson_enabled, odds.as_ref(), ctx.reference_time).is_some() {
+                reason_codes.push("ODDS_FUSION_USED".to_string());
+            }
+            let hybrid_1x2 = combine_one_x_two_at(
                 elo_1x2.clone(),
                 poisson_1x2.clone(),
                 poisson_enabled,
@@ -77,6 +114,7 @@ pub async fn evaluate_markets(
                 &ctx.cfg.model,
                 &ctx.cfg.calibration,
                 ctx.calibrators,
+                ctx.reference_time,
             );
 
             let p_yes = match &market_type {
@@ -104,25 +142,6 @@ pub async fn evaluate_markets(
                     combine_binary_prob(
                         0.5,
                         p_poi,
-                        poisson_enabled,
-                        "totals_over",
-                        &ctx.cfg.model,
-                        &ctx.cfg.calibration,
-                        ctx.calibrators,
-                    )
-                }
-                MarketType::TotalsUnder { line } => {
-                    let p_over = poisson_model.map(|pm| {
-                        pm.totals_over(
-                            &mrec.home_team,
-                            &mrec.away_team,
-                            *line,
-                            ctx.cfg.model.poisson_goal_cap,
-                        )
-                    });
-                    1.0 - combine_binary_prob(
-                        0.5,
-                        p_over,
                         poisson_enabled,
                         "totals_over",
                         &ctx.cfg.model,
@@ -167,26 +186,7 @@ pub async fn evaluate_markets(
                         ctx.calibrators,
                     )
                 }
-                MarketType::SpreadAwayCover { line } => {
-                    let p_home_cover = poisson_model.map(|pm| {
-                        pm.spread_home_cover(
-                            &mrec.home_team,
-                            &mrec.away_team,
-                            -*line,
-                            ctx.cfg.model.poisson_goal_cap,
-                        )
-                    });
-                    1.0 - combine_binary_prob(
-                        hybrid_1x2.home,
-                        p_home_cover,
-                        poisson_enabled,
-                        "spread_cover",
-                        &ctx.cfg.model,
-                        &ctx.cfg.calibration,
-                        ctx.calibrators,
-                    )
-                }
-                MarketType::BinaryGenericYes => 0.5,
+                MarketType::BinaryGenericYes => generic_binary_yes(),
                 MarketType::Unknown => 0.5,
             }
             .clamp(0.0001, 0.9999);
@@ -207,9 +207,31 @@ pub async fn evaluate_markets(
                 reason_codes.push("POISSON_DISABLED_LOW_DATA".to_string());
             }
         } else {
-            reason_codes.push("NO_MATCH_MAPPING".to_string());
-            fair_probs = uniform_probs(market.outcomes.len());
-            confidence = 0.20;
+            fair_probs = if market.outcomes.len() == 2 {
+                let p_yes = generic_binary_yes().clamp(0.0001, 0.9999);
+                let calibrated_edge = (p_yes - implied.first().copied().unwrap_or(0.5)).abs();
+                let fallback_ok = matches!(market_type, MarketType::BinaryGenericYes)
+                    && ctx.calibrators.has("binary_yes")
+                    && binary_yes_span > 0.02
+                    && calibrated_edge >= 0.15;
+
+                if fallback_ok {
+                    reason_codes.push("CALIBRATED_BINARY_YES_FALLBACK".to_string());
+                    match_confidence =
+                        (0.80 + 0.10 * binary_yes_span.max(calibrated_edge)).clamp(0.80, 0.95);
+                    confidence =
+                        (0.55 + 0.20 * binary_yes_span.max(calibrated_edge)).clamp(0.55, 0.85);
+                    vec![p_yes, 1.0 - p_yes]
+                } else {
+                    reason_codes.push("NO_MATCH_MAPPING".to_string());
+                    confidence = 0.20;
+                    vec![p_yes, 1.0 - p_yes]
+                }
+            } else {
+                reason_codes.push("NO_MATCH_MAPPING".to_string());
+                confidence = 0.20;
+                uniform_probs(market.outcomes.len())
+            };
         }
 
         renormalize(&mut fair_probs);
@@ -226,7 +248,7 @@ pub async fn evaluate_markets(
 
         let decision = DecisionRecord {
             market_slug: market.market_slug.clone(),
-            timestamp_utc: Utc::now().to_rfc3339(),
+            timestamp_utc: ctx.reference_time.to_rfc3339(),
             implied_probs: implied.clone(),
             fair_probs: fair_probs.clone(),
             edge: edge.clone(),
@@ -292,18 +314,21 @@ fn probs_for_outcomes(
 
     if market.outcomes.len() == 3 {
         let mut probs = Vec::with_capacity(3);
-        for (idx, o) in market.outcomes.iter().enumerate() {
+        for o in &market.outcomes {
             let on = normalize(o);
-            match classify_outcome_side(&on, idx, &market.outcomes, mrec) {
-                Some(OutcomeSide::Home) => probs.push(one_x_two.home),
-                Some(OutcomeSide::Draw) => probs.push(one_x_two.draw),
-                Some(OutcomeSide::Away) => probs.push(one_x_two.away),
-                None => match mt {
+            if on.contains("draw") {
+                probs.push(one_x_two.draw);
+            } else if fuzzy_contains(&on, &normalize(&mrec.home_team)) {
+                probs.push(one_x_two.home);
+            } else if fuzzy_contains(&on, &normalize(&mrec.away_team)) {
+                probs.push(one_x_two.away);
+            } else {
+                match mt {
                     MarketType::OneXTwoHome => probs.push(one_x_two.home),
                     MarketType::OneXTwoDraw => probs.push(one_x_two.draw),
                     MarketType::OneXTwoAway => probs.push(one_x_two.away),
                     _ => probs.push(1.0 / 3.0),
-                },
+                }
             }
         }
         renormalize(&mut probs);
@@ -313,102 +338,32 @@ fn probs_for_outcomes(
     uniform_probs(market.outcomes.len())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OutcomeSide {
-    Home,
-    Draw,
-    Away,
-}
-
-fn classify_outcome_side(
-    outcome_norm: &str,
-    idx: usize,
-    outcomes: &[String],
-    mrec: &MatchRecord,
-) -> Option<OutcomeSide> {
-    if is_draw_text(outcome_norm) {
-        return Some(OutcomeSide::Draw);
-    }
-    if fuzzy_contains(outcome_norm, &normalize(&mrec.home_team))
-        || matches!(outcome_norm, "home" | "1" | "home win")
-    {
-        return Some(OutcomeSide::Home);
-    }
-    if fuzzy_contains(outcome_norm, &normalize(&mrec.away_team))
-        || matches!(outcome_norm, "away" | "2" | "away win")
-    {
-        return Some(OutcomeSide::Away);
-    }
-
-    infer_three_way_side_by_index(idx, outcomes)
-}
-
-fn infer_three_way_side_by_index(idx: usize, outcomes: &[String]) -> Option<OutcomeSide> {
-    if outcomes.len() != 3 {
-        return None;
-    }
-    let normalized = outcomes.iter().map(|x| normalize(x)).collect::<Vec<_>>();
-    let draw_idx = normalized.iter().position(|x| is_draw_text(x))?;
-    let non_draw = (0..3).filter(|i| *i != draw_idx).collect::<Vec<_>>();
-    if idx == draw_idx {
-        return Some(OutcomeSide::Draw);
-    }
-    if idx == non_draw[0] {
-        return Some(OutcomeSide::Home);
-    }
-    if idx == non_draw[1] {
-        return Some(OutcomeSide::Away);
-    }
-    None
-}
-
 fn classify_market_type(market: &MarketRecord, match_rec: Option<&MatchRecord>) -> MarketType {
-    let raw_q = market.question.to_ascii_lowercase();
     let q = normalize(&market.question);
-    let raw_outcomes = market
-        .outcomes
-        .iter()
-        .map(|x| x.to_ascii_lowercase())
-        .collect::<Vec<_>>();
     let outcomes_norm = market
         .outcomes
         .iter()
         .map(|x| normalize(x))
         .collect::<Vec<_>>();
 
-    if is_known_unsupported_market(&raw_q) {
-        return MarketType::Unknown;
-    }
-
     if q.contains("both teams to score") || q.contains("btts") {
         return MarketType::BttsYes;
     }
 
-    if let Some(mt) = classify_totals_market(&raw_q, &raw_outcomes) {
-        return mt;
+    if let Some(line) = extract_total_line(&q) {
+        return MarketType::TotalsOver { line };
     }
 
-    if let Some(mt) = classify_spread_market(&raw_q, &outcomes_norm, match_rec) {
-        return mt;
+    if let Some(line) = extract_spread_line(&q) {
+        return MarketType::SpreadHomeCover { line };
     }
 
-    if is_draw_text(&q) && is_yes_no(&outcomes_norm) {
+    if q.contains("draw") && is_yes_no(&outcomes_norm) {
         return MarketType::OneXTwoDraw;
     }
 
-    if contains_any(
-        &q,
-        &[
-            "win", "wins", "beat", "beats", "defeat", "defeats", "upset", "upsets",
-        ],
-    ) && is_yes_no(&outcomes_norm)
-    {
+    if q.contains("win") && is_yes_no(&outcomes_norm) {
         if let Some(m) = match_rec {
-            match first_team_side_mentioned(&q, m) {
-                Some(OutcomeSide::Home) => return MarketType::OneXTwoHome,
-                Some(OutcomeSide::Away) => return MarketType::OneXTwoAway,
-                _ => {}
-            }
             if fuzzy_contains(&q, &normalize(&m.home_team)) {
                 return MarketType::OneXTwoHome;
             }
@@ -420,6 +375,12 @@ fn classify_market_type(market: &MarketRecord, match_rec: Option<&MatchRecord>) 
     }
 
     if outcomes_norm.len() == 2 {
+        if (outcomes_norm[0].contains("over") || outcomes_norm[0].contains("under"))
+            && let Some(line) =
+                extract_total_line(&format!("{} {}", outcomes_norm[0], outcomes_norm[1]))
+        {
+            return MarketType::TotalsOver { line };
+        }
         if is_yes_no(&outcomes_norm) {
             return MarketType::BinaryGenericYes;
         }
@@ -437,128 +398,73 @@ fn classify_market_type(market: &MarketRecord, match_rec: Option<&MatchRecord>) 
         }
     }
 
-    if outcomes_norm.len() == 3 {
-        if outcomes_norm.iter().any(|o| o.contains("draw")) {
-            return MarketType::OneXTwoHome;
-        }
+    if outcomes_norm.len() == 3 && outcomes_norm.iter().any(|o| o.contains("draw")) {
+        return MarketType::OneXTwoHome;
     }
 
     MarketType::Unknown
 }
 
-fn classify_totals_market(question: &str, outcomes_raw: &[String]) -> Option<MarketType> {
-    if let Some(line) = extract_total_line(question) {
-        if is_under_text(question) {
-            return Some(MarketType::TotalsUnder { line });
-        }
-        return Some(MarketType::TotalsOver { line });
-    }
-
-    if outcomes_raw.len() == 2 {
-        let joined = format!("{} {}", outcomes_raw[0], outcomes_raw[1]);
-        if let Some(line) = extract_total_line(&joined) {
-            if is_under_text(&outcomes_raw[0]) {
-                return Some(MarketType::TotalsUnder { line });
-            }
-            if is_over_text(&outcomes_raw[0]) {
-                return Some(MarketType::TotalsOver { line });
-            }
-            if is_under_text(&outcomes_raw[1]) {
-                return Some(MarketType::TotalsOver { line });
-            }
-            if is_over_text(&outcomes_raw[1]) {
-                return Some(MarketType::TotalsUnder { line });
-            }
-            return Some(MarketType::TotalsOver { line });
-        }
-    }
-
-    None
-}
-
-fn classify_spread_market(
-    question: &str,
-    outcomes_norm: &[String],
-    match_rec: Option<&MatchRecord>,
-) -> Option<MarketType> {
-    let line = extract_spread_line(question)?;
-    let side = match_rec
-        .and_then(|m| first_team_side_mentioned(question, m))
-        .or_else(|| {
-            if outcomes_norm.first().is_some_and(|x| x.contains("away")) {
-                Some(OutcomeSide::Away)
-            } else if outcomes_norm.first().is_some_and(|x| x.contains("home")) {
-                Some(OutcomeSide::Home)
-            } else {
-                None
-            }
-        })
-        .unwrap_or(OutcomeSide::Home);
-
-    Some(match side {
-        OutcomeSide::Away => MarketType::SpreadAwayCover { line },
-        _ => MarketType::SpreadHomeCover { line },
-    })
-}
-
 fn pick_best_match<'a>(
     market: &MarketRecord,
     matches: &'a [MatchRecord],
+    reference_time: DateTime<Utc>,
 ) -> Option<(&'a MatchRecord, f64)> {
-    let mut candidates: Vec<(&MatchRecord, f64)> = Vec::new();
+    let mut candidates: Vec<(&MatchRecord, f64)> = matches
+        .iter()
+        .filter_map(|m| score_market_match(market, m, reference_time).map(|conf| (m, conf)))
+        .collect();
+    candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+    candidates.into_iter().next()
+}
 
+fn score_market_match(
+    market: &MarketRecord,
+    m: &MatchRecord,
+    reference_time: DateTime<Utc>,
+) -> Option<f64> {
     let (home_hint, away_hint) = extract_team_hints(market);
     let league_hint = market.league_hint.as_ref().map(|x| normalize(x));
     let start_hint = market.start_time_utc;
 
-    for m in matches {
-        let score_team = if let (Some(hh), Some(ah)) = (&home_hint, &away_hint) {
-            let h = jaccard(hh, &normalize(&m.home_team));
-            let a = jaccard(ah, &normalize(&m.away_team));
-            0.5 * h + 0.5 * a
-        } else {
-            0.45
-        };
+    let score_team = if let (Some(hh), Some(ah)) = (&home_hint, &away_hint) {
+        let h = jaccard(hh, &normalize(&m.home_team));
+        let a = jaccard(ah, &normalize(&m.away_team));
+        0.5 * h + 0.5 * a
+    } else {
+        0.45
+    };
 
-        let score_time = if let Some(st) = start_hint {
-            let delta = (m.datetime_utc - st).num_minutes().abs() as f64;
-            (-delta / 180.0).exp().clamp(0.0, 1.0)
-        } else {
-            0.60
-        };
+    let score_time = if let Some(st) = start_hint {
+        let delta = (m.datetime_utc - st).num_minutes().abs() as f64;
+        (-delta / 180.0).exp().clamp(0.0, 1.0)
+    } else {
+        0.60
+    };
 
-        let score_league = if let Some(lh) = &league_hint {
-            let lm = normalize(&m.league);
-            if lm == *lh || lm.contains(lh) || lh.contains(&lm) {
-                1.0
-            } else {
-                0.6
-            }
+    let score_league = if let Some(lh) = &league_hint {
+        let lm = normalize(&m.league);
+        if lm == *lh || lm.contains(lh) || lh.contains(&lm) {
+            1.0
         } else {
             0.6
-        };
-
-        let conf = 0.45 * score_team + 0.35 * score_time + 0.20 * score_league;
-
-        // Hard pre-filter to avoid impossible pairings when market has explicit time.
-        if let Some(st) = start_hint {
-            let delta = (m.datetime_utc - st).num_hours().abs();
-            if delta > 48 {
-                continue;
-            }
-        } else {
-            let now = Utc::now();
-            if m.datetime_utc < now - Duration::days(3) || m.datetime_utc > now + Duration::days(7)
-            {
-                continue;
-            }
         }
+    } else {
+        0.6
+    };
 
-        candidates.push((m, conf));
+    if let Some(st) = start_hint {
+        let delta = (m.datetime_utc - st).num_hours().abs();
+        if delta > 48 {
+            return None;
+        }
+    } else if m.datetime_utc < reference_time - Duration::days(3)
+        || m.datetime_utc > reference_time + Duration::days(7)
+    {
+        return None;
     }
 
-    candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
-    candidates.into_iter().next()
+    Some(0.45 * score_team + 0.35 * score_time + 0.20 * score_league)
 }
 
 fn extract_team_hints(market: &MarketRecord) -> (Option<String>, Option<String>) {
@@ -566,10 +472,10 @@ fn extract_team_hints(market: &MarketRecord) -> (Option<String>, Option<String>)
         return (Some(normalize(h)), Some(normalize(a)));
     }
 
-    if let Some(title) = &market.event_title {
-        if let Some((h, a)) = parse_vs(title) {
-            return (Some(normalize(&h)), Some(normalize(&a)));
-        }
+    if let Some(title) = &market.event_title
+        && let Some((h, a)) = parse_vs(title)
+    {
+        return (Some(normalize(&h)), Some(normalize(&a)));
     }
 
     if let Some((h, a)) = parse_vs(&market.question) {
@@ -585,7 +491,7 @@ fn extract_team_hints(market: &MarketRecord) -> (Option<String>, Option<String>)
 
 fn parse_vs(text: &str) -> Option<(String, String)> {
     let raw = text.replace("VS", "vs").replace("Vs", "vs");
-    let seps = [" versus ", " vs. ", " vs ", " v ", " @ ", " - "];
+    let seps = [" vs. ", " vs ", " v ", " @ ", " - "];
     for sep in seps {
         if let Some((a, b)) = raw.split_once(sep) {
             let left = a.trim();
@@ -641,14 +547,10 @@ fn extract_spread_line(text: &str) -> Option<f64> {
 }
 
 fn extract_xpoint5_line(text: &str, hints: &[&str]) -> Option<f64> {
-    if !hints.iter().any(|h| has_hint(text, h)) {
+    if !hints.iter().any(|h| text.contains(h)) {
         return None;
     }
-    let cleaned = text
-        .replace(',', " ")
-        .replace(':', " ")
-        .replace('(', " ")
-        .replace(')', " ");
+    let cleaned = text.replace([',', ':', '(', ')'], " ");
     let toks = cleaned.split_whitespace().collect::<Vec<_>>();
     for t in toks {
         if t.ends_with(".5") || t.ends_with(",5") {
@@ -659,65 +561,6 @@ fn extract_xpoint5_line(text: &str, hints: &[&str]) -> Option<f64> {
         }
     }
     None
-}
-
-fn has_hint(text: &str, hint: &str) -> bool {
-    if hint.chars().all(|c| c.is_ascii_alphabetic()) {
-        let normalized = normalize(text);
-        if hint.contains(' ') {
-            normalized.contains(hint)
-        } else {
-            normalized.split_whitespace().any(|tok| tok == hint)
-        }
-    } else {
-        text.contains(hint)
-    }
-}
-
-fn first_team_side_mentioned(question: &str, mrec: &MatchRecord) -> Option<OutcomeSide> {
-    let q = normalize(question);
-    let home = normalize(&mrec.home_team);
-    let away = normalize(&mrec.away_team);
-    let home_pos = q.find(&home);
-    let away_pos = q.find(&away);
-
-    match (home_pos, away_pos) {
-        (Some(h), Some(a)) if h < a => Some(OutcomeSide::Home),
-        (Some(_), Some(_)) => Some(OutcomeSide::Away),
-        (Some(_), None) => Some(OutcomeSide::Home),
-        (None, Some(_)) => Some(OutcomeSide::Away),
-        _ => None,
-    }
-}
-
-fn is_draw_text(text: &str) -> bool {
-    contains_any(text, &["draw", "tie"]) || text == "x"
-}
-
-fn is_over_text(text: &str) -> bool {
-    contains_any(text, &["over", "more than", "at least"])
-}
-
-fn is_under_text(text: &str) -> bool {
-    contains_any(text, &["under", "fewer than", "less than", "at most"])
-}
-
-fn contains_any(text: &str, needles: &[&str]) -> bool {
-    needles.iter().any(|needle| text.contains(needle))
-}
-
-fn is_known_unsupported_market(text: &str) -> bool {
-    contains_any(
-        text,
-        &[
-            "double chance",
-            "draw no bet",
-            "dnb",
-            "win or draw",
-            "draw or win",
-            "asian handicap",
-        ],
-    )
 }
 
 fn is_yes_no(outcomes: &[String]) -> bool {
@@ -817,219 +660,148 @@ fn parse_rfc3339(raw: &str) -> Option<DateTime<Utc>> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::calibration::CalibrationRegistry;
+    use super::{MapperContext, evaluate_markets};
+    use crate::calibration::{CalibrationRegistry, Calibrator, CalibratorModel};
     use crate::config::AppConfig;
     use crate::model_elo::EloModel;
-    use crate::model_hybrid::combine_binary_prob;
-    use crate::model_poisson::LeaguePoissonModel;
     use crate::odds_provider::MockOddsProvider;
-    use crate::types::PoissonPersisted;
-    use chrono::TimeZone;
+    use crate::thesportsdb_lookup::MatchLookupProvider;
+    use crate::types::{MarketRecord, MatchRecord};
+    use async_trait::async_trait;
+    use chrono::{TimeZone, Utc};
+    use std::collections::HashMap;
 
-    fn sample_match() -> MatchRecord {
-        MatchRecord {
-            id: "match-1".to_string(),
-            league: "PL".to_string(),
-            season: "2026".to_string(),
-            datetime_utc: Utc.with_ymd_and_hms(2026, 2, 18, 18, 0, 0).unwrap(),
-            home_team: "Team A".to_string(),
-            away_team: "Team B".to_string(),
-            home_goals: None,
-            away_goals: None,
-            status: "SCHEDULED".to_string(),
+    struct DummyLookup;
+
+    #[async_trait]
+    impl MatchLookupProvider for DummyLookup {
+        async fn find_matches(&self, _market: &MarketRecord) -> anyhow::Result<Vec<MatchRecord>> {
+            Ok(vec![MatchRecord {
+                id: "sportsdb:4328:demo".to_string(),
+                league: "PL".to_string(),
+                season: "2026".to_string(),
+                datetime_utc: Utc.with_ymd_and_hms(2026, 3, 14, 17, 30, 0).unwrap(),
+                home_team: "Arsenal".to_string(),
+                away_team: "Everton".to_string(),
+                home_goals: None,
+                away_goals: None,
+                status: "SCHEDULED".to_string(),
+            }])
         }
     }
 
-    fn sample_market(question: &str, outcomes: Vec<&str>) -> MarketRecord {
-        MarketRecord {
-            market_slug: "team-a-vs-team-b-2026-02-18".to_string(),
-            question: question.to_string(),
-            outcomes: outcomes.into_iter().map(|x| x.to_string()).collect(),
-            prices: vec![0.5, 0.5, 0.5],
-            best_bid: Some(0.49),
-            best_ask: Some(0.51),
+    #[tokio::test]
+    async fn remote_lookup_prevents_no_match_mapping() {
+        let market = MarketRecord {
+            market_slug: "arsenal-vs-everton-2026-03-14".to_string(),
+            question: "Will Arsenal beat Everton?".to_string(),
+            outcomes: vec!["Yes".to_string(), "No".to_string()],
+            prices: vec![0.51, 0.49],
+            best_bid: Some(0.50),
+            best_ask: Some(0.52),
             spread: Some(0.02),
-            liquidity: 5_000.0,
-            volume: 10_000.0,
-            volume_5m: Some(800.0),
-            start_time_utc: Some(Utc.with_ymd_and_hms(2026, 2, 18, 18, 0, 0).unwrap()),
-            event_title: Some("Team A versus Team B".to_string()),
-            event_slug: Some("team-a-vs-team-b".to_string()),
-            event_home_team: Some("Team A".to_string()),
-            event_away_team: Some("Team B".to_string()),
+            liquidity: 5000.0,
+            volume: 10000.0,
+            volume_5m: Some(900.0),
+            start_time_utc: Some(Utc.with_ymd_and_hms(2026, 3, 14, 17, 30, 0).unwrap()),
+            time_to_settlement_minutes: None,
+            event_title: Some("Arsenal vs Everton".to_string()),
+            event_slug: Some("pl".to_string()),
+            event_home_team: Some("Arsenal".to_string()),
+            event_away_team: Some("Everton".to_string()),
             league_hint: Some("PL".to_string()),
             active: true,
             closed: false,
             accepting_orders: true,
-        }
-    }
-
-    fn sample_poisson() -> LeaguePoissonModel {
-        let mut attack = HashMap::new();
-        attack.insert("Team A".to_string(), 0.25);
-        attack.insert("Team B".to_string(), -0.10);
-
-        let mut defense = HashMap::new();
-        defense.insert("Team A".to_string(), -0.05);
-        defense.insert("Team B".to_string(), 0.15);
-
-        let persisted = PoissonPersisted {
-            league: "PL".to_string(),
-            mu: 0.05,
-            home_adv: 0.12,
-            updated_at: Utc.with_ymd_and_hms(2026, 2, 17, 0, 0, 0).unwrap(),
-            attack,
-            defense,
         };
 
-        LeaguePoissonModel::from_persisted(&persisted, true)
-    }
-
-    #[test]
-    fn generic_home_draw_away_labels_map_to_distinct_probabilities() {
-        let market = sample_market(
-            "Who wins Team A versus Team B?",
-            vec!["Home", "Draw", "Away"],
-        );
-        let probs = probs_for_outcomes(
-            &market,
-            &sample_match(),
-            &MarketType::OneXTwoHome,
-            0.0,
-            OneXTwoProbs {
-                home: 0.52,
-                draw: 0.21,
-                away: 0.27,
-            },
-        );
-
-        assert!((probs[0] - 0.52).abs() < 1e-9);
-        assert!((probs[1] - 0.21).abs() < 1e-9);
-        assert!((probs[2] - 0.27).abs() < 1e-9);
-    }
-
-    #[test]
-    fn one_x_two_numeric_labels_map_to_home_draw_away() {
-        let market = sample_market("Who wins Team A versus Team B?", vec!["1", "X", "2"]);
-        let probs = probs_for_outcomes(
-            &market,
-            &sample_match(),
-            &MarketType::OneXTwoHome,
-            0.0,
-            OneXTwoProbs {
-                home: 0.48,
-                draw: 0.24,
-                away: 0.28,
-            },
-        );
-
-        assert!((probs[0] - 0.48).abs() < 1e-9);
-        assert!((probs[1] - 0.24).abs() < 1e-9);
-        assert!((probs[2] - 0.28).abs() < 1e-9);
-    }
-
-    #[test]
-    fn beat_question_maps_to_away_team_when_away_is_named_first() {
-        let market = sample_market("Will Team B beat Team A?", vec!["Yes", "No"]);
-        let mt = classify_market_type(&market, Some(&sample_match()));
-        assert!(matches!(mt, MarketType::OneXTwoAway));
-    }
-
-    #[test]
-    fn double_chance_question_stays_unknown() {
-        let market = sample_market("Will Team A win or draw versus Team B?", vec!["Yes", "No"]);
-        let mt = classify_market_type(&market, Some(&sample_match()));
-        assert!(matches!(mt, MarketType::Unknown));
-    }
-
-    #[tokio::test]
-    async fn under_total_question_uses_under_probability() {
-        let market = sample_market(
-            "Will there be under 2.5 total goals in Team A versus Team B?",
-            vec!["Yes", "No"],
-        );
-        let poisson = sample_poisson();
         let cfg = AppConfig::default();
-        let expected_under = 1.0
-            - combine_binary_prob(
-                0.5,
-                Some(poisson.totals_over("Team A", "Team B", 2.5, cfg.model.poisson_goal_cap)),
-                true,
-                "totals_over",
-                &cfg.model,
-                &cfg.calibration,
-                &CalibrationRegistry::default(),
-            );
-
         let elo = EloModel::from_map(HashMap::new());
+        let poisson = HashMap::new();
         let calibrators = CalibrationRegistry::default();
         let odds = MockOddsProvider;
-        let mut poisson_models = HashMap::new();
-        poisson_models.insert("PL".to_string(), poisson);
-
+        let lookup = DummyLookup;
         let ctx = MapperContext {
             cfg: &cfg,
             elo_model: &elo,
-            poisson_models: &poisson_models,
+            poisson_models: &poisson,
             odds_provider: &odds,
             calibrators: &calibrators,
+            match_lookup: Some(&lookup),
+            reference_time: Utc::now(),
         };
 
-        let (fair, _evals, _decisions) = evaluate_markets(&[market], &[sample_match()], &ctx)
+        let (_fair, evals, _decisions) = evaluate_markets(&[market], &[], &ctx)
             .await
-            .unwrap();
-        assert!((fair.results[0].fair_probs[0] - expected_under).abs() < 1e-6);
+            .expect("evaluate");
+        let eval = &evals[0];
+        assert!(eval.match_rec.is_some());
+        assert!(eval.reason_codes.iter().any(|x| x == "REMOTE_MATCH_LOOKUP"));
+        assert!(!eval.reason_codes.iter().any(|x| x == "NO_MATCH_MAPPING"));
     }
 
     #[tokio::test]
-    async fn away_spread_question_uses_away_cover_probability() {
-        let market = sample_market("Will Team B cover +0.5 versus Team A?", vec!["Yes", "No"]);
-        let poisson = sample_poisson();
+    async fn calibrated_binary_yes_no_match_can_pass_when_strong_enough() {
+        let market = MarketRecord {
+            market_slug: "generic-binary-yes-market".to_string(),
+            question: "Will the event happen?".to_string(),
+            outcomes: vec!["Yes".to_string(), "No".to_string()],
+            prices: vec![0.50, 0.50],
+            best_bid: Some(0.49),
+            best_ask: Some(0.51),
+            spread: Some(0.02),
+            liquidity: 50000.0,
+            volume: 100000.0,
+            volume_5m: Some(12000.0),
+            start_time_utc: None,
+            time_to_settlement_minutes: None,
+            event_title: None,
+            event_slug: None,
+            event_home_team: None,
+            event_away_team: None,
+            league_hint: None,
+            active: true,
+            closed: false,
+            accepting_orders: true,
+        };
+
         let cfg = AppConfig::default();
         let elo = EloModel::from_map(HashMap::new());
-        let hybrid_home = combine_one_x_two(
-            elo.predict_one_x_two("Team A", "Team B", "PL", &cfg.model),
-            Some(poisson.one_x_two("Team A", "Team B", cfg.model.poisson_goal_cap)),
-            true,
-            None,
-            &cfg.model,
-            &cfg.calibration,
-            &CalibrationRegistry::default(),
-        )
-        .home;
-        let expected_away_cover = 1.0
-            - combine_binary_prob(
-                hybrid_home,
-                Some(poisson.spread_home_cover(
-                    "Team A",
-                    "Team B",
-                    -0.5,
-                    cfg.model.poisson_goal_cap,
-                )),
-                true,
-                "spread_cover",
-                &cfg.model,
-                &cfg.calibration,
-                &CalibrationRegistry::default(),
-            );
-
-        let calibrators = CalibrationRegistry::default();
+        let poisson = HashMap::new();
+        let mut calibrators = CalibrationRegistry::default();
+        calibrators.insert(Calibrator {
+            market_type: "binary_yes".to_string(),
+            method: "platt".to_string(),
+            model: CalibratorModel::Platt { a: 0.0, b: 10.0 },
+        });
         let odds = MockOddsProvider;
-        let mut poisson_models = HashMap::new();
-        poisson_models.insert("PL".to_string(), poisson);
-
         let ctx = MapperContext {
             cfg: &cfg,
             elo_model: &elo,
-            poisson_models: &poisson_models,
+            poisson_models: &poisson,
             odds_provider: &odds,
             calibrators: &calibrators,
+            match_lookup: None,
+            reference_time: Utc::now(),
         };
 
-        let (fair, _evals, _decisions) = evaluate_markets(&[market], &[sample_match()], &ctx)
+        let (_fair, evals, _decisions) = evaluate_markets(&[market], &[], &ctx)
             .await
-            .unwrap();
-        assert!((fair.results[0].fair_probs[0] - expected_away_cover).abs() < 1e-6);
+            .expect("evaluate");
+        let eval = &evals[0];
+        assert!(eval.match_rec.is_none());
+        assert!(
+            eval.reason_codes
+                .iter()
+                .any(|x| x == "CALIBRATED_BINARY_YES_FALLBACK")
+        );
+        assert!(!eval.reason_codes.iter().any(|x| x == "NO_MATCH_MAPPING"));
+        assert!(eval.match_confidence >= cfg.model.min_match_confidence);
+        assert!(eval.confidence >= cfg.engine.min_confidence);
+
+        let (orders, decisions) =
+            crate::engine::generate_orders_at(&evals, &cfg, 1000.0, 0.0, Utc::now());
+        assert_eq!(orders.orders.len(), 1);
+        assert_eq!(decisions[0].decision, "BUY");
     }
 }

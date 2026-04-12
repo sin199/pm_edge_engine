@@ -21,6 +21,8 @@ request_timeout_secs = 25
 retries = 5
 public_fallback_enabled = true
 public_fallback_base_url = "https://api.openligadb.de"
+sportsdb_lookup_enabled = true
+sportsdb_lookup_base_url = "https://www.thesportsdb.com/api/v1/json/123"
 
 [model]
 elo_k = 18.0

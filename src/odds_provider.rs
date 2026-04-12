@@ -35,10 +35,10 @@ pub fn build_odds_provider(cfg: &OddsConfig) -> Box<dyn OddsProvider> {
     }
     match cfg.provider.to_ascii_lowercase().as_str() {
         "json" => {
-            if let Some(path) = cfg.json_file.as_ref() {
-                if let Ok(p) = JsonOddsProvider::from_file(path) {
-                    return Box::new(p);
-                }
+            if let Some(path) = cfg.json_file.as_ref()
+                && let Ok(p) = JsonOddsProvider::from_file(path)
+            {
+                return Box::new(p);
             }
             Box::new(MockOddsProvider)
         }

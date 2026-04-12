@@ -1,0 +1,15 @@
+{
+  "matches": [
+    {
+      "id": "fixture-match",
+      "league": "PL",
+      "season": "2026",
+      "datetime_utc": "2026-02-18T18:00:00Z",
+      "home_team": "Team A",
+      "away_team": "Team B",
+      "home_goals": 2,
+      "away_goals": 0,
+      "status": "FINISHED"
+    }
+  ]
+}

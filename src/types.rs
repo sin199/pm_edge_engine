@@ -1,5 +1,4 @@
 #![allow(dead_code)]
-#![allow(dead_code)]
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -18,6 +17,8 @@ pub struct MarketRecord {
     pub volume: f64,
     pub volume_5m: Option<f64>,
     pub start_time_utc: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub time_to_settlement_minutes: Option<f64>,
     pub event_title: Option<String>,
     pub event_slug: Option<String>,
     pub event_home_team: Option<String>,
