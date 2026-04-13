@@ -375,7 +375,8 @@ fn gamma_to_market(g: GammaMarket) -> Option<MarketRecord> {
         volume: parse_opt_f64(g.volume.as_ref().or(g.volumeNum.as_ref())).unwrap_or(0.0),
         volume_5m: parse_opt_f64(g.volume_5m.as_ref()),
         start_time_utc,
-        time_to_settlement_minutes: end_time_utc.map(|end| (end - Utc::now()).num_minutes() as f64),
+        time_to_settlement_minutes: start_time_utc
+            .map(|start| (start - Utc::now()).num_minutes() as f64),
         event_title,
         event_slug,
         event_home_team,
