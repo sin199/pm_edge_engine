@@ -381,7 +381,7 @@ async fn refresh_outputs(cfg: &AppConfig, storage: &Storage) -> Result<()> {
     )?;
 
     let (_fair2, evaluated, _) = evaluate_for_candidates(cfg, storage, &markets).await?;
-    let (orders, _decisions) = engine::generate_orders(&evaluated, cfg, 50.0, 0.0);
+    let (orders, _decisions) = engine::generate_orders(&evaluated, cfg, 1000.0, 0.0);
     fs::write(
         &cfg.runtime.orders_out_path,
         serde_json::to_string_pretty(&orders)?,
