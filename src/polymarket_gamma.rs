@@ -97,6 +97,14 @@ struct GammaEventPage {
     markets: Option<Vec<GammaMarket>>,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+struct GammaSportMeta {
+    #[serde(default)]
+    sport: Option<String>,
+    #[serde(default)]
+    tags: Option<String>,
+}
+
 pub struct GammaClient {
     http: Client,
     cfg: GammaConfig,
@@ -114,7 +122,7 @@ impl GammaClient {
 
         if self.cfg.sports_only {
             let mut seen = std::collections::HashSet::new();
-            for tag_id in soccer_game_tag_ids() {
+            for tag_id in self.fetch_soccer_game_tag_ids().await?.iter().copied() {
                 let mut offset = 0usize;
                 let mut page = 0usize;
                 while page < self.cfg.max_pages {
@@ -199,6 +207,37 @@ impl GammaClient {
         let url = format!("{}/markets/slug/{}", self.cfg.base_url, slug);
         let row: GammaMarket = self.get_retry(&url).await?;
         gamma_to_market(row).ok_or_else(|| anyhow!("invalid market response for slug={slug}"))
+    }
+
+    async fn fetch_soccer_game_tag_ids(&self) -> Result<Vec<i64>> {
+        let url = format!("{}/sports", self.cfg.base_url);
+        let rows: Vec<GammaSportMeta> = self.get_retry(&url).await?;
+        let mut tags = Vec::new();
+
+        for row in rows {
+            let Some(sport) = row.sport.as_deref() else {
+                continue;
+            };
+            if !is_soccer_sport_key(sport) {
+                continue;
+            }
+            if let Some(raw_tags) = row.tags.as_deref() {
+                for part in raw_tags.split(',') {
+                    if let Ok(id) = part.trim().parse::<i64>() {
+                        tags.push(id);
+                    }
+                }
+            }
+        }
+
+        tags.sort_unstable();
+        tags.dedup();
+
+        if tags.is_empty() {
+            Ok(soccer_game_tag_ids().to_vec())
+        } else {
+            Ok(tags)
+        }
     }
 
     async fn get_retry<T>(&self, url: &str) -> Result<T>
@@ -378,6 +417,56 @@ fn soccer_game_tag_ids() -> &'static [i64] {
         102594, 102595, 102763, 102604, 102154, 102648, 102649, 102770, 102771, 102650, 102764,
         102765, 102653, 102651, 102652, 101772, 103075, 100350,
     ]
+}
+
+fn is_soccer_sport_key(raw: &str) -> bool {
+    let s = raw.to_ascii_lowercase();
+    matches!(
+        s.as_str(),
+        "epl"
+            | "lal"
+            | "bun"
+            | "fl1"
+            | "sea"
+            | "ucl"
+            | "uel"
+            | "mls"
+            | "afc"
+            | "ofc"
+            | "fif"
+            | "ere"
+            | "arg"
+            | "itc"
+            | "mex"
+            | "lib"
+            | "sud"
+            | "tur"
+            | "con"
+            | "cof"
+            | "uef"
+            | "caf"
+            | "rus"
+            | "efa"
+            | "efl"
+            | "cdr"
+            | "col"
+            | "cde"
+            | "dfb"
+            | "bra"
+            | "jap"
+            | "ja2"
+            | "kor"
+            | "spl"
+            | "chi"
+            | "aus"
+            | "ind"
+            | "nor"
+            | "den"
+            | "por"
+            | "mar1"
+            | "ssc"
+    ) || s.contains("soccer")
+        || s.contains("football")
 }
 
 fn parse_datetime(raw: Option<&String>) -> Option<DateTime<Utc>> {
