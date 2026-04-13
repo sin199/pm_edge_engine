@@ -77,6 +77,8 @@ struct GammaMarket {
     #[serde(default)]
     end_date: Option<String>,
     #[serde(default)]
+    gameStartTime: Option<String>,
+    #[serde(default)]
     acceptingOrders: Option<bool>,
     #[serde(default)]
     closed: Option<bool>,
@@ -120,10 +122,6 @@ impl GammaClient {
                         "{}/events?limit={}&offset={}&active=true&closed=false&tag_id={}&related_tags=true",
                         self.cfg.base_url, self.cfg.page_limit, offset, tag_id
                     );
-                    url.push_str("&end_date_min=");
-                    url.push_str(&urlencoding::encode(&now.to_rfc3339()));
-                    url.push_str("&end_date_max=");
-                    url.push_str(&urlencoding::encode(&near_term_window_end.to_rfc3339()));
                     url.push_str("&order=end_date&ascending=true");
 
                     let page_rows: Vec<GammaEventPage> = self.get_retry(&url).await?;
@@ -286,7 +284,12 @@ fn gamma_to_market(g: GammaMarket) -> Option<MarketRecord> {
     let mut event_home_team = None;
     let mut event_away_team = None;
     let mut league_hint = None;
-    let mut start_time_utc = parse_datetime(g.startDate.as_ref().or(g.start_date.as_ref()));
+    let mut start_time_utc = parse_datetime(
+        g.gameStartTime
+            .as_ref()
+            .or(g.startDate.as_ref())
+            .or(g.start_date.as_ref()),
+    );
     let mut end_time_utc = parse_datetime(g.endDate.as_ref().or(g.end_date.as_ref()));
 
     if let Some(events) = g.events
@@ -354,29 +357,36 @@ fn is_near_term_market(
     now: DateTime<Utc>,
     near_term_window_end: DateTime<Utc>,
 ) -> bool {
-    let end_time = parse_datetime(g.endDate.as_ref().or(g.end_date.as_ref())).or_else(|| {
-        g.events.as_ref().and_then(|events| {
-            events
-                .first()
-                .and_then(|e| parse_datetime(e.endDate.as_ref().or(e.end_date.as_ref())))
-        })
-    });
+    let game_time = parse_datetime(
+        g.gameStartTime
+            .as_ref()
+            .or(g.startDate.as_ref())
+            .or(g.start_date.as_ref()),
+    );
 
-    let Some(end_time) = end_time else {
+    let Some(game_time) = game_time else {
         return false;
     };
 
-    end_time >= now && end_time <= near_term_window_end
+    game_time >= now && game_time <= near_term_window_end
 }
 
 fn soccer_game_tag_ids() -> &'static [i64] {
-    &[82, 780, 1494, 102070, 101962, 100977]
+    &[
+        82, 780, 1494, 102070, 101962, 100977, 100100, 101787, 101783, 101680, 102566, 102539,
+        101735, 102008, 102448, 102561, 102562, 102564, 100787, 101280, 102544, 102540, 102593,
+        102594, 102595, 102763, 102604, 102154, 102648, 102649, 102770, 102771, 102650, 102764,
+        102765, 102653, 102651, 102652, 101772, 103075, 100350,
+    ]
 }
 
 fn parse_datetime(raw: Option<&String>) -> Option<DateTime<Utc>> {
     let raw = raw?;
     DateTime::parse_from_rfc3339(raw)
         .map(|x| x.with_timezone(&Utc))
+        .or_else(|_| {
+            DateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S%#z").map(|x| x.with_timezone(&Utc))
+        })
         .ok()
 }
 
@@ -517,6 +527,21 @@ fn is_footballish_market(g: &GammaMarket) -> bool {
         "fifa",
         "uefa",
         "epl",
+        "lal",
+        "sea",
+        "mex",
+        "arg",
+        "tur",
+        "rus",
+        "den",
+        "por",
+        "lib",
+        "sud",
+        "mls",
+        "bundesliga",
+        "ligue 1",
+        "conference league",
+        "europa league",
     ];
     KEYWORDS.iter().any(|kw| text.contains(kw))
 }
